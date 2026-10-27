@@ -1,6 +1,10 @@
 extends RefCounted
 ## Static game data: towers, enemies, combos and level layouts.
 
+# Hand-off between the level editor and the game (survives scene changes).
+static var custom_level: Dictionary = {}  # non-empty: the game playtests just this level
+static var editor_level: Dictionary = {}  # what the editor was working on
+
 const TOWERS := {
 	"bolt": {
 		"name": "Bolt Tower", "color": Color("f2c94c"),

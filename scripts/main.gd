@@ -2,6 +2,7 @@ extends Node2D
 ## Sokoban TD: push tower blocks to shape the enemy path, then survive the wave.
 
 const Data = preload("res://scripts/data.gd")
+const BoardDraw = preload("res://scripts/board_draw.gd")
 
 const TILE := 48.0
 const W := 16
@@ -17,6 +18,8 @@ const START_LIVES := 20
 enum Phase { TITLE, BUILD, WAVE, REWARD, GAMEOVER, VICTORY }
 
 var phase: int = Phase.TITLE
+var levels: Array = Data.LEVELS
+var custom := false
 var level_idx := 0
 var wave_idx := 0
 var lives := START_LIVES
@@ -67,8 +70,11 @@ var font: Font
 
 func _ready() -> void:
 	font = ThemeDB.fallback_font
+	custom = not Data.custom_level.is_empty()
+	levels = [Data.custom_level] if custom else Data.LEVELS
 	reset_run()
-	phase = Phase.TITLE
+	if not custom:
+		phase = Phase.TITLE
 
 
 # ---------------------------------------------------------------- run / level flow
@@ -88,7 +94,7 @@ func load_level(i: int) -> void:
 	level_idx = i
 	wave_idx = 0
 	level_done = false
-	var lv: Dictionary = Data.LEVELS[i]
+	var lv: Dictionary = levels[i]
 	tiles = []
 	spawns.clear()
 	docks.clear()
@@ -149,9 +155,9 @@ func start_wave() -> void:
 
 
 func generate_wave(li: int, wi: int) -> Array:
-	var d := wi
+	var d: int = wi + int(levels[li].get("difficulty", 0))
 	for i in li:
-		d += Data.LEVELS[i].waves
+		d += levels[i].waves
 	var hp_scale := 1.0 + 0.2 * d + 0.012 * d * d
 	var count := 5 + int(d * 1.6)
 	var pool := ["grunt"]
@@ -178,7 +184,7 @@ func generate_wave(li: int, wi: int) -> Array:
 				type = pool[k]
 				break
 		q.append({"type": type, "scale": hp_scale, "boss": false})
-	if wi == Data.LEVELS[li].waves - 1:
+	if wi == levels[li].waves - 1:
 		q.append({"type": "brute", "scale": hp_scale * 3.0, "boss": true})
 	return q
 
@@ -186,8 +192,8 @@ func generate_wave(li: int, wi: int) -> Array:
 func wave_cleared() -> void:
 	wave_idx += 1
 	projectiles.clear()
-	if wave_idx >= Data.LEVELS[level_idx].waves:
-		if level_idx >= Data.LEVELS.size() - 1:
+	if wave_idx >= levels[level_idx].waves:
+		if level_idx >= levels.size() - 1:
 			phase = Phase.VICTORY
 			return
 		level_done = true
@@ -490,13 +496,20 @@ func compute_stats() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
 		var k: int = event.keycode
+		if k == KEY_ESCAPE and custom:
+			open_editor()
+			return
 		match phase:
 			Phase.TITLE:
 				if not event.echo and k in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
 					reset_run()
+				elif k == KEY_E:
+					open_editor()
 			Phase.GAMEOVER, Phase.VICTORY:
 				if not event.echo and k in [KEY_ENTER, KEY_KP_ENTER, KEY_R]:
 					reset_run()
+				elif k == KEY_E:
+					open_editor()
 			Phase.REWARD:
 				if k >= KEY_1 and k <= KEY_3:
 					choose_reward(k - KEY_1)
@@ -520,6 +533,10 @@ func _unhandled_input(event: InputEvent) -> void:
 						return
 			Phase.TITLE, Phase.GAMEOVER, Phase.VICTORY:
 				reset_run()
+
+
+func open_editor() -> void:
+	get_tree().change_scene_to_file("res://editor.tscn")
 
 
 func key_dir(k: int) -> Vector2i:
@@ -856,51 +873,11 @@ func text(s: String, pos: Vector2, size := 16, col := Color.WHITE, width := -1.0
 func draw_board() -> void:
 	for y in H:
 		for x in W:
-			var c := Vector2i(x, y)
-			var r := cell_rect(c)
-			var ch: String = tiles[y][x]
-			if ch == "#":
-				draw_rect(r, Color("2b2f45"))
-				draw_rect(Rect2(r.position, Vector2(TILE, 5)), Color("3a3f5c"))
-				continue
-			draw_rect(r, Color("1c1f2e") if (x + y) % 2 == 0 else Color("202436"))
-			var cc := cell_center(c)
-			match ch:
-				"*":
-					draw_rect(r.grow(-3), Color(1, 0.8, 0.3, 0.10 + 0.06 * sin(t * 3.0)))
-					draw_rect(r.grow(-3), Color("f2c94c"), false, 2.0)
-					draw_star(cc, 8.0, Color(0.95, 0.79, 0.3, 0.8))
-				"S":
-					for i in 3:
-						var k := fmod(t * 0.8 + i / 3.0, 1.0)
-						draw_arc(cc, 4.0 + k * 18.0, 0, TAU, 24, Color(1, 0.35, 0.35, 1.0 - k), 2.0)
-					draw_circle(cc, 6.0, Color("e05555"))
-				"G":
-					var s := 15.0 + sin(t * 2.5) * 2.0
-					draw_colored_polygon(PackedVector2Array([cc + Vector2(0, -s), cc + Vector2(s * 0.75, 0),
-						cc + Vector2(0, s), cc + Vector2(-s * 0.75, 0)]), Color("4fd1c5"))
-					draw_circle(cc, 4.0, Color.WHITE)
+			BoardDraw.draw_tile(self, cell_rect(Vector2i(x, y)), tiles[y][x], (x + y) % 2 == 0, t)
 	# corner brackets mark "premium" cells: a block pushed there is stuck forever
 	for c in deadlocks:
-		if block_index(c) >= 0:
-			continue
-		var r := cell_rect(c).grow(-6)
-		var col := Color(1, 1, 1, 0.13)
-		var corner := Vector2(
-			r.position.x if is_hard(c + Vector2i.LEFT) else r.end.x,
-			r.position.y if is_hard(c + Vector2i.UP) else r.end.y)
-		var sx := 1.0 if corner.x == r.position.x else -1.0
-		var sy := 1.0 if corner.y == r.position.y else -1.0
-		draw_line(corner, corner + Vector2(10 * sx, 0), col, 2.0)
-		draw_line(corner, corner + Vector2(0, 10 * sy), col, 2.0)
-
-
-func draw_star(c: Vector2, r: float, col: Color) -> void:
-	var pts := PackedVector2Array()
-	for i in 10:
-		var a := -PI / 2 + i * PI / 5
-		pts.append(c + Vector2(cos(a), sin(a)) * (r if i % 2 == 0 else r * 0.45))
-	draw_colored_polygon(pts, col)
+		if block_index(c) < 0:
+			BoardDraw.draw_corner_mark(self, cell_rect(c), is_hard(c + Vector2i.LEFT), is_hard(c + Vector2i.UP))
 
 
 func draw_path_preview() -> void:
@@ -1085,14 +1062,17 @@ func draw_effects() -> void:
 
 
 func draw_top_bar() -> void:
-	var lv: Dictionary = Data.LEVELS[level_idx]
-	text("LEVEL %d  ·  %s" % [level_idx + 1, lv.name.to_upper()], Vector2(18, 36), 20, Color("e8e8f0"))
+	var lv: Dictionary = levels[level_idx]
+	var title := "PLAYTEST  ·  %s" % lv.name.to_upper() if custom else "LEVEL %d  ·  %s" % [level_idx + 1, lv.name.to_upper()]
+	text(title, Vector2(18, 36), 20, Color("e8e8f0"))
 	var hint := ""
 	match phase:
 		Phase.BUILD:
 			hint = "BUILD - push blocks, SPACE to send the wave"
 		Phase.WAVE:
 			hint = "WAVE IN PROGRESS - blocks are frozen   (F: speed x%d)" % int(speed)
+	if custom and phase == Phase.BUILD:
+		hint = "Esc: back to editor  ·  " + hint
 	if message_t > 0.0:
 		text(message, Vector2(300, 36), 16, Color(1, 0.85, 0.4, clampf(message_t, 0.0, 1.0)), 484, HORIZONTAL_ALIGNMENT_RIGHT)
 	else:
@@ -1105,7 +1085,7 @@ func draw_panel() -> void:
 	draw_line(Vector2(x - 4, 0), Vector2(x - 4, SCREEN.y), Color("2b2f45"), 2.0)
 	text("SOKOBAN TD", Vector2(x + 12, 36), 24, Color("f2c94c"))
 	var y := 70.0
-	var lv: Dictionary = Data.LEVELS[level_idx]
+	var lv: Dictionary = levels[level_idx]
 	text("Lives", Vector2(x + 12, y), 15, Color("9aa0bc"))
 	text(str(lives), Vector2(x + 70, y), 18, Color("e05555") if lives <= 5 else Color.WHITE)
 	text("Wave", Vector2(x + 130, y), 15, Color("9aa0bc"))
@@ -1214,7 +1194,7 @@ func draw_inspector(x: float, y: float) -> float:
 			draw_multiline_string(font, Vector2(x, y), info, HORIZONTAL_ALIGNMENT_LEFT, 230, 13, 4, Color("b8bdd6"))
 			return y + 60
 	if phase == Phase.BUILD:
-		draw_multiline_string(font, Vector2(x, y), Data.LEVELS[level_idx].tip, HORIZONTAL_ALIGNMENT_LEFT,
+		draw_multiline_string(font, Vector2(x, y), levels[level_idx].tip, HORIZONTAL_ALIGNMENT_LEFT,
 			230, 13, 4, Color("7f86a6"))
 		y += 60
 	# block inventory
@@ -1247,6 +1227,7 @@ func draw_title() -> void:
 	draw_multiline_string(font, Vector2(cx - 330, 240), lines, HORIZONTAL_ALIGNMENT_CENTER, 660, 16, -1, Color("d0d4e8"))
 	var a := 0.6 + 0.4 * sin(t * 4.0)
 	text("Press ENTER to begin", Vector2(0, 420), 22, Color(1, 1, 1, a), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	text("E: level editor", Vector2(0, 456), 15, Color("9aa0bc"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func card_rect(i: int) -> Rect2:
@@ -1308,10 +1289,12 @@ func draw_rewards() -> void:
 func draw_end_screen(title: String, col: Color) -> void:
 	dim()
 	text(title, Vector2(0, 220), 48, col, SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
-	var lv: Dictionary = Data.LEVELS[level_idx]
+	var lv: Dictionary = levels[level_idx]
 	var sub := "Reached level %d (%s), wave %d  ·  %d enemies destroyed  ·  %d blocks" % [
 		level_idx + 1, lv.name, mini(wave_idx + 1, lv.waves), kills, blocks.size()]
 	if phase == Phase.VICTORY:
-		sub = "All 3 levels survived with %d lives left  ·  %d enemies destroyed  ·  %d blocks" % [lives, kills, blocks.size()]
+		sub = "%s with %d lives left  ·  %d enemies destroyed  ·  %d blocks" % [
+			"Level beaten" if custom else "All %d levels survived" % levels.size(), lives, kills, blocks.size()]
 	text(sub, Vector2(0, 270), 16, Color("d0d4e8"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
-	text("Press R to start a new run", Vector2(0, 340), 20, Color(1, 1, 1, 0.6 + 0.4 * sin(t * 4.0)), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	var again := "R: retry  ·  E or Esc: back to editor" if custom else "R: new run  ·  E: level editor"
+	text(again, Vector2(0, 340), 20, Color(1, 1, 1, 0.6 + 0.4 * sin(t * 4.0)), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
