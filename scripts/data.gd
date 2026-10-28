@@ -56,62 +56,63 @@ const COMBOS := {
 }
 
 # Map legend:
-#   #  wall          .  floor         S  enemy spawn    G  core (enemy goal)
-#   P  player start  D  dock (where your blocks are placed)
-#   *  power tile: +50% damage / +0.5 range, usually somewhere you can never push back out of
+#   -  wall          .  floor         S  enemy spawn    A  core (the point to protect)
+#   T  tower spawn: reward towers drop here, taking turns between spawns; a covered spawn is skipped
+#   P  player start (optional - defaults to next to the first tower spawn)
+#   *  power tile: +50% damage / +0.5 range
+# Older maps used # for walls, G for the core and D for tower spawns; those still load.
 const LEVELS := [
 	{
-		"name": "The Crossing",
+		"name": "The Corridor",
 		"waves": 4,
-		"tip": "A single gap splits the field. Corners hold blocks forever - choose them wisely.",
+		"tip": "One long hall. Push towers into the lane to make enemies weave past them.",
 		"map": [
-			"################",
-			"#......#.......#",
-			"#..D...#...D...#",
-			"S......#.......#",
-			"#..D...#..*....#",
-			"#..P...........G",
-			"#......#...D...#",
-			"#..D...#.......#",
-			"#......#..D....#",
-			"#*.....#......*#",
-			"################",
+			"----------------------",
+			"-....................-",
+			"S.................T..A",
+			"-....................-",
+			"----------------------",
 		],
 	},
 	{
-		"name": "Switchback",
+		"name": "Split Wall",
 		"waves": 5,
-		"tip": "The road doubles back on itself. One tower can cover both lanes.",
+		"tip": "A wall with a single gap. New towers alternate between the two spawns.",
 		"map": [
-			"################",
-			"S.....#........#",
-			"#.....#..D.....#",
-			"#..D..#....##..#",
-			"#.....#.*..#...#",
-			"#..P..#..D.#.D.#",
-			"#.D........#...#",
-			"#.....#....#...#",
-			"#.*...#..D.#*..#",
-			"#.....#....#...G",
-			"################",
+			"----------------------",
+			"S..........-.........-",
+			"-.....T..........T...-",
+			"-..........-.........A",
+			"----------------------",
 		],
 	},
 	{
-		"name": "Twin Gates",
+		"name": "The Comb",
 		"waves": 6,
-		"tip": "Two gates, one core. Enemies alternate between the spawns.",
+		"tip": "Enemies snake through the comb before reaching the open field.",
 		"map": [
-			"#######S########",
-			"#..............#",
-			"#.D..#....#..D.#",
-			"#....#.*..#....#",
-			"#.*..#....#....#",
-			"S..D.#.P..#.D..#",
-			"#....#....#..*.#",
-			"#....#.D..#....#",
-			"#....###..###..#",
-			"#..............#",
-			"#######G########",
+			"----------------------",
+			"S.-..................-",
+			"-.-.-.-..............-",
+			"-.-.-.-..............-",
+			"-.-.-................-",
+			"-.-.-.........T......-",
+			"-.-.-................-",
+			"-.-..................A",
+			"-...-................-",
+			"----------------------",
 		],
 	},
 ]
+
+# Map characters -> the internal tiles the game uses (# wall, G core, D tower spawn).
+const TILE_ALIASES := {"-": "#", "A": "G", "T": "D"}
+const TILE_EXPORT := {"#": "-", "G": "A", "D": "T"}
+
+
+static func internal_tile(ch: String) -> String:
+	return TILE_ALIASES.get(ch, ch)
+
+
+static func export_tile(ch: String) -> String:
+	return TILE_EXPORT.get(ch, ch)

@@ -5,11 +5,13 @@ const Data = preload("res://scripts/data.gd")
 const BoardDraw = preload("res://scripts/board_draw.gd")
 
 const TILE := 48.0
-const W := 16
-const H := 11
-const GRID_OFS := Vector2(16, 56)
-const PANEL_X := 800.0
-const SCREEN := Vector2(1060, 600)
+const BOARD_AREA := Rect2(16, 56, 992, 648)
+const PANEL_X := 1024.0
+const SCREEN := Vector2(1280, 720)
+const MIN_W := 5
+const MAX_W := 30
+const MIN_H := 3
+const MAX_H := 16
 const NONE := Vector2i(-99, -99)
 const DIRS: Array[Vector2i] = [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
 const SAVE_DIR := "user://levels"
@@ -18,12 +20,16 @@ const TOOLS := [
 	{"ch": ".", "name": "Floor", "color": Color("202436")},
 	{"ch": "S", "name": "Enemy gate", "color": Color("e05555")},
 	{"ch": "G", "name": "Core", "color": Color("4fd1c5")},
-	{"ch": "P", "name": "Player start", "color": Color("3fbf7f")},
-	{"ch": "D", "name": "Block dock", "color": Color("9aa0bc")},
+	{"ch": "D", "name": "Tower spawn", "color": Color("8fd9a8")},
+	{"ch": "P", "name": "Player (opt.)", "color": Color("3fbf7f")},
 	{"ch": "*", "name": "Power tile", "color": Color("f2c94c")},
 ]
 
-var map: Array = []
+var map: Array = []  # rows of single-character internal tiles (# wall, G core, D tower spawn)
+var W := 16
+var H := 11
+var board_pos := BOARD_AREA.position
+var board_scale := 1.0
 var level_name := "My Level"
 var waves := 5
 var difficulty := 0
@@ -65,23 +71,27 @@ func build_ui() -> void:
 	name_edit.max_length = 24
 	name_edit.text_changed.connect(func(s: String): level_name = s)
 	add_child(name_edit)
-	button("-", Rect2(x + 150, 102, 28, 24), func(): waves = maxi(1, waves - 1))
+	button("-", Rect2(x + 128, 102, 28, 24), func(): waves = maxi(1, waves - 1))
 	button("+", Rect2(x + 208, 102, 28, 24), func(): waves = mini(12, waves + 1))
-	button("-", Rect2(x + 150, 130, 28, 24), func(): difficulty = maxi(0, difficulty - 1))
+	button("-", Rect2(x + 128, 130, 28, 24), func(): difficulty = maxi(0, difficulty - 1))
 	button("+", Rect2(x + 208, 130, 28, 24), func(): difficulty = mini(15, difficulty + 1))
-	button("Playtest  [P]", Rect2(x, 404, 116, 30), playtest)
-	button("Save", Rect2(x + 120, 404, 116, 30), save_level)
+	button("-", Rect2(x + 128, 158, 28, 24), func(): resize(W - 1, H))
+	button("+", Rect2(x + 208, 158, 28, 24), func(): resize(W + 1, H))
+	button("-", Rect2(x + 128, 186, 28, 24), func(): resize(W, H - 1))
+	button("+", Rect2(x + 208, 186, 28, 24), func(): resize(W, H + 1))
+	button("Playtest  [P]", Rect2(x, 540, 116, 30), playtest)
+	button("Save", Rect2(x + 120, 540, 116, 30), save_level)
 	load_menu = OptionButton.new()
-	load_menu.position = Vector2(x, 440)
+	load_menu.position = Vector2(x, 576)
 	load_menu.size = Vector2(170, 30)
 	load_menu.fit_to_longest_item = false
 	add_child(load_menu)
-	button("Load", Rect2(x + 176, 440, 60, 30), load_selected)
-	button("New", Rect2(x, 476, 116, 30), func():
+	button("Load", Rect2(x + 176, 576, 60, 30), load_selected)
+	button("New", Rect2(x, 612, 116, 30), func():
 		push_undo()
 		new_level())
-	button("Copy as code", Rect2(x + 120, 476, 116, 30), copy_as_code)
-	button("Back to game  [Esc]", Rect2(x, 512, 236, 30), back_to_game)
+	button("Copy as code", Rect2(x + 120, 612, 116, 30), copy_as_code)
+	button("Back to game  [Esc]", Rect2(x, 648, 236, 30), back_to_game)
 
 
 func button(label: String, r: Rect2, cb: Callable) -> Button:
@@ -96,31 +106,34 @@ func button(label: String, r: Rect2, cb: Callable) -> Button:
 
 
 func tool_rect(i: int) -> Rect2:
-	return Rect2(PANEL_X + 12 + (i % 2) * 120, 186 + (i / 2) * 28, 116, 24)
+	return Rect2(PANEL_X + 12 + (i % 2) * 120, 244 + (i / 2) * 28, 116, 24)
 
 
 # ---------------------------------------------------------------- level data
 
 func new_level() -> void:
-	var rows := []
-	for y in H:
-		var row := ""
-		for x in W:
-			row += "#" if x == 0 or y == 0 or x == W - 1 or y == H - 1 else "."
-		rows.append(row)
-	rows[3] = "#..D...........#"
-	rows[5] = "S..P...........G"
-	rows[7] = "#..D...........#"
-	set_level({"name": "My Level", "waves": 5, "difficulty": 0, "map": rows})
+	set_level({"name": "My Level", "waves": 5, "difficulty": 0, "map": [
+		"----------------------",
+		"-....................-",
+		"-....................-",
+		"S.........T..........A",
+		"-....................-",
+		"-....................-",
+		"----------------------",
+	]})
 
 
 func set_level(lv: Dictionary) -> void:
 	map = []
+	var width := 0
+	for line in lv.map:
+		width = maxi(width, line.length())
 	for line in lv.map:
 		var row := []
-		for x in W:
-			row.append(line[x])
+		for x in width:
+			row.append(Data.internal_tile(line[x]) if x < line.length() else "#")
 		map.append(row)
+	fit_map()
 	level_name = lv.get("name", "My Level")
 	waves = int(lv.get("waves", 5))
 	difficulty = int(lv.get("difficulty", 0))
@@ -132,7 +145,10 @@ func set_level(lv: Dictionary) -> void:
 func to_level() -> Dictionary:
 	var rows := []
 	for row in map:
-		rows.append("".join(row))
+		var line := ""
+		for ch in row:
+			line += Data.export_tile(ch)
+		rows.append(line)
 	var nm := level_name.strip_edges()
 	return {
 		"name": nm if nm != "" else "Untitled",
@@ -147,15 +163,47 @@ func to_level() -> Dictionary:
 static func check_shape(lv) -> String:
 	if not lv is Dictionary or not lv.has("map") or not lv.map is Array:
 		return "not a level file"
-	if lv.map.size() != H:
-		return "map must have %d rows" % H
+	if lv.map.size() < MIN_H or lv.map.size() > MAX_H:
+		return "map must have %d-%d rows" % [MIN_H, MAX_H]
 	for line in lv.map:
-		if not line is String or line.length() != W:
-			return "every row must be %d characters" % W
+		if not line is String or line.length() != lv.map[0].length():
+			return "every row must be the same length"
+		if line.length() < MIN_W or line.length() > MAX_W:
+			return "rows must be %d-%d characters" % [MIN_W, MAX_W]
 		for ch in line:
-			if not ch in "#.SGPD*":
+			if not ch in "-.SATP*#GD":
 				return "unknown tile '%s'" % ch
 	return ""
+
+
+## Grow or shrink the map, keeping the top-left. New edge cells become walls.
+func resize(w: int, h: int) -> void:
+	w = clampi(w, MIN_W, MAX_W)
+	h = clampi(h, MIN_H, MAX_H)
+	if w == W and h == H:
+		return
+	push_undo()
+	var out := []
+	for y in h:
+		var row := []
+		for x in w:
+			if y < H and x < W:
+				row.append(map[y][x])
+			else:
+				row.append("#" if x == 0 or y == 0 or x == w - 1 or y == h - 1 else ".")
+		out.append(row)
+	map = out
+	fit_map()
+
+
+## Sync W/H with `map`, fit the board into the view and re-validate.
+func fit_map() -> void:
+	H = map.size()
+	W = map[0].size()
+	board_scale = minf(1.0, minf(BOARD_AREA.size.x / (W * TILE), BOARD_AREA.size.y / (H * TILE)))
+	board_pos = BOARD_AREA.position + (BOARD_AREA.size - Vector2(W, H) * TILE * board_scale) / 2.0
+	hover = NONE
+	validate()
 
 
 # ---------------------------------------------------------------- validation
@@ -178,7 +226,7 @@ func validate() -> void:
 	var spawns: Array[Vector2i] = []
 	var goals: Array[Vector2i] = []
 	var players: Array[Vector2i] = []
-	var docks := 0
+	var tower_spawns: Array[Vector2i] = []
 	for y in H:
 		for x in W:
 			var c := Vector2i(x, y)
@@ -190,20 +238,18 @@ func validate() -> void:
 				"P":
 					players.append(c)
 				"D":
-					docks += 1
+					tower_spawns.append(c)
 			if at(c) in [".", "D", "*", "P"]:
 				var horiz := is_hard(c + Vector2i.LEFT) or is_hard(c + Vector2i.RIGHT)
 				var vert := is_hard(c + Vector2i.UP) or is_hard(c + Vector2i.DOWN)
 				if horiz and vert:
 					deadlocks.append(c)
 	if goals.is_empty():
-		errors.append("Place a core (G).")
+		errors.append("Place a core (A).")
 	if spawns.is_empty():
-		errors.append("Place at least one enemy gate (S).")
-	if players.is_empty():
-		errors.append("Place the player start (P).")
-	if docks == 0:
-		warnings.append("No docks: starting blocks go next to the player.")
+		errors.append("Place at least one enemy spawn (S).")
+	if tower_spawns.is_empty():
+		warnings.append("No tower spawns: rewards will only be upgrades.")
 	if goals.is_empty():
 		return
 	var dist := {goals[0]: 0}
@@ -219,7 +265,7 @@ func validate() -> void:
 				q.append(n)
 	for s in spawns:
 		if not dist.has(s):
-			errors.append("Gate at %d,%d can't reach the core." % [s.x, s.y])
+			errors.append("Spawn at %d,%d can't reach the core." % [s.x, s.y])
 			continue
 		# follow the same steepest-descent rule enemies use in the game
 		var pts := [s]
@@ -234,6 +280,9 @@ func validate() -> void:
 		paths.append(pts)
 	if not players.is_empty() and not dist.has(players[0]):
 		errors.append("The player start can't reach the core.")
+	for c in tower_spawns:
+		if not dist.has(c):
+			errors.append("Tower spawn at %d,%d is walled off." % [c.x, c.y])
 
 
 # ---------------------------------------------------------------- editing
@@ -265,11 +314,11 @@ func undo() -> void:
 		flash("Nothing to undo.")
 		return
 	map = undo_stack.pop_back()
-	validate()
+	fit_map()
 
 
 func world_to_cell(p: Vector2) -> Vector2i:
-	var g := (p - GRID_OFS) / TILE
+	var g := (p - board_pos) / board_scale / TILE
 	var c := Vector2i(floori(g.x), floori(g.y))
 	if c.x < 0 or c.y < 0 or c.x >= W or c.y >= H:
 		return NONE
@@ -419,7 +468,7 @@ func _process(delta: float) -> void:
 
 
 func cell_rect(c: Vector2i) -> Rect2:
-	return Rect2(GRID_OFS + Vector2(c) * TILE, Vector2(TILE, TILE))
+	return Rect2(Vector2(c) * TILE, Vector2(TILE, TILE))
 
 
 func text(s: String, pos: Vector2, size := 16, col := Color.WHITE, width := -1.0,
@@ -429,6 +478,7 @@ func text(s: String, pos: Vector2, size := 16, col := Color.WHITE, width := -1.0
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, SCREEN), Color("141621"))
+	draw_set_transform(board_pos, 0.0, Vector2(board_scale, board_scale))
 	for y in H:
 		for x in W:
 			var c := Vector2i(x, y)
@@ -441,8 +491,11 @@ func _draw() -> void:
 					draw_circle(r.get_center() + Vector2(-5, -2), 3.0, Color.WHITE)
 					draw_circle(r.get_center() + Vector2(5, -2), 3.0, Color.WHITE)
 				"D":
-					draw_rect(r.grow(-8), Color("9aa0bc"), false, 1.5)
-					draw_rect(r.grow(-14), Color(0.6, 0.63, 0.74, 0.25))
+					var cc := r.get_center()
+					var col := Color(0.55, 0.85, 0.65, 0.8)
+					draw_rect(r.grow(-5), col, false, 2.0)
+					draw_line(cc + Vector2(-7, 0), cc + Vector2(7, 0), col, 2.0)
+					draw_line(cc + Vector2(0, -7), cc + Vector2(0, 7), col, 2.0)
 	for c in deadlocks:
 		BoardDraw.draw_corner_mark(self, cell_rect(c), is_hard(c + Vector2i.LEFT), is_hard(c + Vector2i.UP))
 	for pts in paths:
@@ -455,13 +508,16 @@ func _draw() -> void:
 		var col: Color = TOOLS[tool].color
 		draw_rect(cell_rect(hover), Color(col, 0.25))
 		draw_rect(cell_rect(hover), col.lightened(0.3), false, 2.0)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	text("LEVEL EDITOR  ·  %s" % to_level().name.to_upper(), Vector2(18, 36), 20, Color("e8e8f0"))
 	var hint := "LMB paint  ·  RMB erase  ·  Ctrl+Z undo  ·  1-7 tools"
+	if hover != NONE:
+		hint = "%d, %d   ·   " % [hover.x, hover.y] + hint
 	if message_t > 0.0:
-		text(message, Vector2(300, 36), 15, Color(1, 0.85, 0.4, clampf(message_t, 0.0, 1.0)), 484, HORIZONTAL_ALIGNMENT_RIGHT)
+		text(message, Vector2(300, 36), 15, Color(1, 0.85, 0.4, clampf(message_t, 0.0, 1.0)), PANEL_X - 316, HORIZONTAL_ALIGNMENT_RIGHT)
 	else:
-		text(hint, Vector2(300, 36), 14, Color("9aa0bc"), 484, HORIZONTAL_ALIGNMENT_RIGHT)
+		text(hint, Vector2(300, 36), 14, Color("9aa0bc"), PANEL_X - 316, HORIZONTAL_ALIGNMENT_RIGHT)
 
 	var x := PANEL_X
 	draw_rect(Rect2(x - 4, 0, SCREEN.x - x + 4, SCREEN.y), Color("181a28"))
@@ -469,10 +525,14 @@ func _draw() -> void:
 	text("LEVEL EDITOR", Vector2(x + 12, 36), 24, Color("f2c94c"))
 	text("Name", Vector2(x + 12, 56), 13, Color("6c7290"))
 	text("Waves", Vector2(x + 12, 119), 15, Color("9aa0bc"))
-	text(str(waves), Vector2(x + 178, 119), 16, Color.WHITE, 30, HORIZONTAL_ALIGNMENT_CENTER)
+	text(str(waves), Vector2(x + 160, 119), 16, Color.WHITE, 46, HORIZONTAL_ALIGNMENT_CENTER)
 	text("Difficulty", Vector2(x + 12, 147), 15, Color("9aa0bc"))
-	text(str(difficulty), Vector2(x + 178, 147), 16, Color.WHITE, 30, HORIZONTAL_ALIGNMENT_CENTER)
-	text("TILES", Vector2(x + 12, 178), 13, Color("6c7290"))
+	text(str(difficulty), Vector2(x + 160, 147), 16, Color.WHITE, 46, HORIZONTAL_ALIGNMENT_CENTER)
+	text("Width", Vector2(x + 12, 175), 15, Color("9aa0bc"))
+	text(str(W), Vector2(x + 160, 175), 16, Color.WHITE, 46, HORIZONTAL_ALIGNMENT_CENTER)
+	text("Height", Vector2(x + 12, 203), 15, Color("9aa0bc"))
+	text(str(H), Vector2(x + 160, 203), 16, Color.WHITE, 46, HORIZONTAL_ALIGNMENT_CENTER)
+	text("TILES", Vector2(x + 12, 236), 13, Color("6c7290"))
 	for i in TOOLS.size():
 		var r := tool_rect(i)
 		var sel := i == tool
@@ -480,16 +540,16 @@ func _draw() -> void:
 		if sel:
 			draw_rect(r, Color("f2c94c"), false, 1.5)
 		draw_rect(Rect2(r.position + Vector2(5, 5), Vector2(14, 14)), TOOLS[i].color)
-		text("%d %s" % [i + 1, TOOLS[i].name], r.position + Vector2(24, 17), 13, Color.WHITE if sel else Color("b8bdd6"))
+		text("%d %s" % [i + 1, TOOLS[i].name], r.position + Vector2(24, 17), 12, Color.WHITE if sel else Color("b8bdd6"))
 
-	var y := 316.0
+	var y := 380.0
 	if errors.is_empty():
 		text("Ready to play", Vector2(x + 12, y), 14, Color("6be675"))
 		y += 18
-	for e in errors.slice(0, 4):
+	for e in errors.slice(0, 6):
 		draw_multiline_string(font, Vector2(x + 12, y), "x " + e, HORIZONTAL_ALIGNMENT_LEFT, 236, 13, 2, Color("e07070"))
 		y += 18
 	for w in warnings:
 		draw_multiline_string(font, Vector2(x + 12, y), "! " + w, HORIZONTAL_ALIGNMENT_LEFT, 236, 12, 2, Color("e0c070"))
 		y += 30
-	text("Corner brackets: a block pushed there is stuck.", Vector2(x + 12, 570), 11, Color("6c7290"), 236)
+	text("Brackets: corners a block can't leave.", Vector2(x + 12, 704), 11, Color("6c7290"))

@@ -27,7 +27,7 @@ func _process(_delta: float) -> bool:
 
 	# sealing the gate makes it invalid, undo fixes it
 	ed.push_undo()
-	for y in range(1, 10):
+	for y in range(1, ed.H - 1):
 		ed.paint(Vector2i(8, y), "#")
 	check(ed.errors.size() >= 1 and "can't reach" in ed.errors[0], "sealed map reports unreachable gate")
 	ed.undo()
@@ -48,6 +48,8 @@ func _process(_delta: float) -> bool:
 	var back = JSON.parse_string(FileAccess.get_file_as_string(path))
 	check(ed.check_shape(back) == "" and back.map == ed.to_level().map and int(back.waves) == 2,
 		"saved JSON round-trips")
+	var joined := "".join(back.map)
+	check("-" in joined and "A" in joined and "T" in joined and not "#" in joined, "saved map uses the - A T legend")
 	var idx := -1
 	for i in ed.load_sources.size():
 		if ed.load_sources[i].get("path", "") == path:
@@ -58,9 +60,21 @@ func _process(_delta: float) -> bool:
 	ed.load_selected()
 	check(ed.level_name == "Test Level 42" and ed.difficulty == 3, "load restores level settings")
 	check(ed.check_shape({"map": ["###"]}) != "", "malformed level rejected")
+
+	# resizing keeps content and undo restores the size
+	var w0: int = ed.W
+	ed.resize(w0 + 2, ed.H + 1)
+	check(ed.W == w0 + 2 and ed.map.size() == ed.H and ed.map[0].size() == ed.W, "resize grows the map")
+	ed.undo()
+	check(ed.W == w0, "undo restores the size")
+
+	# maps in the old legend (# G D) still load
+	ed.set_level({"name": "Old", "map": ["#####", "S.D.G", "#####"]})
+	check(ed.errors.is_empty() and ed.to_level().map[1] == "S.T.A", "old legend converts")
 	DirAccess.remove_absolute(path)
 
 	# play the custom level to the end
+	ed.new_level()
 	Data.custom_level = ed.to_level()
 	var main = load("res://main.tscn").instantiate()
 	root.add_child(main)
