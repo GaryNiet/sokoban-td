@@ -485,7 +485,7 @@ func _draw() -> void:
 			var c := Vector2i(x, y)
 			var ch: String = map[y][x]
 			var r := cell_rect(c)
-			BoardDraw.draw_tile(self, r, ch, (x + y) % 2 == 0, t, at(c + Vector2i.UP) == "O", at(c + Vector2i.LEFT) == "O")
+			BoardDraw.draw_tile(self, r, ch, (x + y) % 2 == 0, t, at(c + Vector2i.UP) == "O")
 			match ch:
 				"P":
 					draw_circle(r.get_center(), 13.0, Color("3fbf7f"))

@@ -1,6 +1,6 @@
 # Sokoban TD
 
-A Godot 4.7 roguelite that mixes Sokoban and tower defense, shown in an isometric view. Your towers are crates: push them around to reshape the enemy path, then survive the wave.
+A Godot 4.7 roguelite that mixes Sokoban and tower defense, seen from a camera tilted towards the player, so walls and blocks show their height. Your towers are crates: push them around to reshape the enemy path, then survive the wave.
 
 ## Rules
 - You start the run with one Bolt Tower. You can push blocks only during the build phase. Once enemies are on the field, blocks stay where they are.

@@ -5,9 +5,9 @@ const Data = preload("res://scripts/data.gd")
 const BoardDraw = preload("res://scripts/board_draw.gd")
 
 const TILE := 48.0  # board units per cell; the game logic works on this flat grid
-const ISO := Vector2(2.0 / 3.0, 1.0 / 3.0)  # board units -> isometric pixels (2:1 diamonds)
-const WALL_H := 24.0  # heights are in isometric pixels
-const EDGE_WALL_H := 7.0  # walls along the front edges stay low so they don't hide the board
+const TILT := 0.72  # the camera leans towards the player: rows are squashed to this, columns stay put
+const WALL_H := 20.0  # heights are in screen pixels (before board_scale)
+const EDGE_WALL_H := 6.0  # the wall along the front edge stays low so it doesn't hide the board
 const BOARD_AREA := Rect2(16, 56, 992, 648)
 const PANEL_X := 1024.0
 const SCREEN := Vector2(1280, 720)
@@ -173,12 +173,11 @@ func load_level(i: int) -> void:
 
 
 func layout_board() -> void:
-	var span := float(W + H) * TILE
-	var size := Vector2(span * ISO.x, span * ISO.y + WALL_H)
+	var size := Vector2(W * TILE, H * TILE * TILT + WALL_H)
 	board_scale = minf(1.4, minf(BOARD_AREA.size.x / size.x, BOARD_AREA.size.y / size.y))
 	var top_left := BOARD_AREA.position + (BOARD_AREA.size - size * board_scale) / 2.0
 	board_rect = Rect2(top_left, size * board_scale)
-	board_pos = top_left + Vector2(H * TILE * ISO.x, WALL_H) * board_scale
+	board_pos = top_left + Vector2(0, WALL_H) * board_scale
 
 
 ## Next to the first tower spawn (left side first), so the opening push is obvious.
@@ -337,30 +336,28 @@ func cell_rect(c: Vector2i) -> Rect2:
 	return Rect2(Vector2(c) * TILE, Vector2(TILE, TILE))
 
 
-## Board point at height `h` -> isometric pixels (before board_pos / board_scale).
-func iso(p: Vector2, h := 0.0) -> Vector2:
-	return Vector2((p.x - p.y) * ISO.x, (p.x + p.y) * ISO.y - h)
+## Board point at height `h` -> view pixels (before board_pos / board_scale).
+func project(p: Vector2, h := 0.0) -> Vector2:
+	return Vector2(p.x, p.y * TILT - h)
 
 
-func from_iso(q: Vector2) -> Vector2:
-	var u := q.x / ISO.x
-	var v := q.y / ISO.y
-	return Vector2((u + v) / 2.0, (v - u) / 2.0)
+func unproject(q: Vector2) -> Vector2:
+	return Vector2(q.x, q.y / TILT)
 
 
 ## Draws flat board-space shapes onto the ground (or a surface `h` pixels up).
 func ground_xf(h := 0.0) -> Transform2D:
-	return Transform2D(Vector2(ISO.x, ISO.y) * board_scale, Vector2(-ISO.x, ISO.y) * board_scale,
+	return Transform2D(Vector2(board_scale, 0), Vector2(0, TILT * board_scale),
 		board_pos + Vector2(0, -h * board_scale))
 
 
-## Draws in isometric pixels, for things with height.
+## Draws in view pixels, for things with height.
 func screen_xf() -> Transform2D:
 	return Transform2D(Vector2(board_scale, 0), Vector2(0, board_scale), board_pos)
 
 
 func to_screen(p: Vector2, h := 0.0) -> Vector2:
-	return board_pos + iso(p, h) * board_scale
+	return board_pos + project(p, h) * board_scale
 
 
 func board_screen_rect() -> Rect2:
@@ -837,7 +834,7 @@ func show_banner(text: String) -> void:
 
 func _process(delta: float) -> void:
 	t += delta
-	hover = world_to_cell(from_iso((get_local_mouse_position() - board_pos) / board_scale))
+	hover = world_to_cell(unproject((get_local_mouse_position() - board_pos) / board_scale))
 	update_game(delta * (speed if phase == Phase.WAVE else 1.0), delta)
 	queue_redraw()
 
@@ -1106,8 +1103,7 @@ func draw_board() -> void:
 	for y in H:
 		for x in W:
 			var c := Vector2i(x, y)
-			BoardDraw.draw_tile(self, cell_rect(c), tiles[y][x], (x + y) % 2 == 0, t,
-				tile_at(c + Vector2i.UP) == "O", tile_at(c + Vector2i.LEFT) == "O")
+			BoardDraw.draw_tile(self, cell_rect(c), tiles[y][x], (x + y) % 2 == 0, t, tile_at(c + Vector2i.UP) == "O")
 	# a filled hole shows the top of the block that fell in, flush with the floor
 	for c in filled:
 		var col: Color = Data.TOWERS[filled[c]].color
@@ -1166,36 +1162,33 @@ func draw_ranges() -> void:
 
 
 func draw_shadows() -> void:
-	draw_circle(player_draw + Vector2(4, 4), 12.0, Color(0, 0, 0, 0.35))
+	draw_circle(player_draw + Vector2(0, 4), 12.0, Color(0, 0, 0, 0.35))
 	for e in enemies:
-		draw_circle(e.pos + Vector2(3, 3), e.size * TILE * 0.9, Color(0, 0, 0, 0.3))
+		draw_circle(e.pos + Vector2(0, 3), e.size * TILE * 0.9, Color(0, 0, 0, 0.3))
 
 
 func wall_height(c: Vector2i) -> float:
 	if c.x >= W or c.y >= H or tile_at(c) != "#":
 		return 0.0
-	return EDGE_WALL_H if c.x == W - 1 or c.y == H - 1 else WALL_H
+	return EDGE_WALL_H if c.y == H - 1 else WALL_H
 
 
 func block_height(type: String) -> float:
 	if is_tower(type):
-		return 22.0
-	return 17.0 if type == "stone" else 13.0
+		return 18.0
+	return 14.0 if type == "stone" else 10.0
 
 
 ## A box standing on board point `c`, `e` from its centre to each side, `h` pixels tall.
-## Only the two faces turned towards the viewer (+x and +y) are drawn.
-func draw_prism(c: Vector2, e: float, h: float, top: Color, left: Color, right: Color,
-		show_left := true, show_right := true) -> void:
-	var n := c + Vector2(-e, -e)
-	var ea := c + Vector2(e, -e)
-	var so := c + Vector2(e, e)
-	var w := c + Vector2(-e, e)
-	if show_left:
-		draw_colored_polygon(PackedVector2Array([iso(w), iso(so), iso(so, h), iso(w, h)]), left)
-	if show_right:
-		draw_colored_polygon(PackedVector2Array([iso(so), iso(ea), iso(ea, h), iso(so, h)]), right)
-	draw_colored_polygon(PackedVector2Array([iso(n, h), iso(ea, h), iso(so, h), iso(w, h)]), top)
+## The camera only tilts forward, so just the top and the front (+y) face show.
+func draw_prism(c: Vector2, e: float, h: float, top: Color, front: Color, show_front := true) -> void:
+	var tl := project(c + Vector2(-e, -e), h)
+	var br := project(c + Vector2(e, e))
+	var front_top := project(c + Vector2(-e, e), h)
+	if show_front:
+		draw_rect(Rect2(front_top, br - front_top), front)
+	draw_rect(Rect2(tl, front_top + Vector2(2 * e, 0) - tl), top)
+	draw_line(front_top, front_top + Vector2(2 * e, 0), top.lightened(0.2), 1.5)
 
 
 ## Walls, blocks, the player and enemies, painted back to front.
@@ -1204,12 +1197,12 @@ func draw_world() -> void:
 	for y in H:
 		for x in W:
 			if tiles[y][x] == "#":
-				items.append([(x + y + 1) * TILE, 0, Vector2i(x, y)])
+				items.append([(y + 0.5) * TILE, 0, Vector2i(x, y)])
 	for b in blocks:
-		items.append([b.draw.x + b.draw.y, 1, b])
-	items.append([player_draw.x + player_draw.y, 2, null])
+		items.append([b.draw.y, 1, b])
+	items.append([player_draw.y, 2, null])
 	for e in enemies:
-		items.append([e.pos.x + e.pos.y, 3, e])
+		items.append([e.pos.y, 3, e])
 	items.sort_custom(func(a, b): return a[0] < b[0])
 	for it in items:
 		match it[1]:
@@ -1225,8 +1218,7 @@ func draw_world() -> void:
 
 func draw_wall(c: Vector2i) -> void:
 	var h := wall_height(c)
-	draw_prism(cell_center(c), TILE * 0.5, h, Color("3d4260"), Color("23273a"), Color("2d3249"),
-		wall_height(c + Vector2i.DOWN) < h, wall_height(c + Vector2i.RIGHT) < h)
+	draw_prism(cell_center(c), TILE * 0.5, h, Color("3d4260"), Color("262a3d"), wall_height(c + Vector2i.DOWN) < h)
 
 
 func draw_block(b: Dictionary) -> void:
@@ -1234,7 +1226,7 @@ func draw_block(b: Dictionary) -> void:
 	var c: Vector2 = b.draw
 	var e: float = TILE * 0.4 * (1.0 + b.pop * 0.25)
 	var h: float = block_height(b.type) * (1.0 + b.pop * 0.5)
-	draw_prism(c, e, h, col.darkened(0.15), col.darkened(0.6), col.darkened(0.4))
+	draw_prism(c, e, h, col.darkened(0.15), col.darkened(0.5))
 	# the icon is painted onto the top face
 	draw_set_transform_matrix(ground_xf(h))
 	draw_icon(b.type, c, col)
@@ -1242,7 +1234,7 @@ func draw_block(b: Dictionary) -> void:
 		draw_rect(Rect2(c - Vector2(e, e), Vector2(e, e) * 2.0).grow(2), Color(1, 1, 1, b.pulse * 0.5), false, 2.0)
 	draw_set_transform_matrix(screen_xf())
 	if b.locked:
-		draw_lock(iso(c + Vector2(e, e) * 0.55, h))
+		draw_lock(project(c + Vector2(e, e) * 0.55, h))
 
 
 func draw_icon(type: String, c: Vector2, col: Color) -> void:
@@ -1302,7 +1294,7 @@ func draw_combo_links() -> void:
 				continue
 			if a.type == "stone" and b.type == "stone":
 				continue
-			var mid: Vector2 = iso((a.draw + b.draw) * 0.5, minf(block_height(a.type), block_height(b.type)))
+			var mid: Vector2 = project((a.draw + b.draw) * 0.5, minf(block_height(a.type), block_height(b.type)))
 			var col: Color = Data.TOWERS[a.type].color.lerp(Data.TOWERS[b.type].color, 0.5).lightened(0.3)
 			var s := 6.0 + sin(t * 5.0) * 1.0
 			draw_colored_polygon(PackedVector2Array([mid + Vector2(0, -s), mid + Vector2(s, 0),
@@ -1312,24 +1304,24 @@ func draw_combo_links() -> void:
 
 func draw_player() -> void:
 	var c := player_draw
-	draw_circle(iso(c, 8.0), 12.0, Color("2a8c5b"))
-	draw_circle(iso(c, 15.0), 12.0, Color("3fbf7f"))
-	draw_circle(iso(c, 15.0), 12.0, Color("2a8c5b"), false, 2.0)
+	draw_circle(project(c, 8.0), 12.0, Color("2a8c5b"))
+	draw_circle(project(c, 15.0), 12.0, Color("3fbf7f"))
+	draw_circle(project(c, 15.0), 12.0, Color("2a8c5b"), false, 2.0)
 	var f := Vector2(player_facing)
-	if iso(f).y < 0.0:
+	if project(f).y < 0.0:
 		return  # facing away from the camera: we see the back of the head
 	var side := Vector2(-f.y, f.x)
 	for sgn in [-1.0, 1.0]:
 		var eye: Vector2 = c + f * 6.0 + side * 5.0 * sgn
-		draw_circle(iso(eye, 17.0), 3.5, Color.WHITE)
-		draw_circle(iso(eye + f * 1.5, 17.0), 1.8, Color("1a1a1a"))
+		draw_circle(project(eye, 17.0), 3.5, Color.WHITE)
+		draw_circle(project(eye + f * 1.5, 17.0), 1.8, Color("1a1a1a"))
 
 
 func draw_enemy(e: Dictionary) -> void:
 	var col: Color = Color.WHITE if e.flash > 0.0 else e.color
 	var r: float = e.size * TILE
 	var p: Vector2 = e.pos
-	var body := iso(p, r)
+	var body := project(p, r)
 	match e.type:
 		"grunt", "splitling":
 			draw_circle(body, r, col.darkened(0.3))
@@ -1337,11 +1329,11 @@ func draw_enemy(e: Dictionary) -> void:
 		"runner":
 			var hd: Vector2 = e.heading
 			var sd := Vector2(-hd.y, hd.x)
-			draw_colored_polygon(PackedVector2Array([iso(p + hd * r * 1.3, r), iso(p - hd * r + sd * r, r),
-				iso(p - hd * r - sd * r, r)]), col)
+			draw_colored_polygon(PackedVector2Array([project(p + hd * r * 1.3, r), project(p - hd * r + sd * r, r),
+				project(p - hd * r - sd * r, r)]), col)
 		"brute":
-			draw_prism(p, r * 0.85, r * 1.8, col, col.darkened(0.45), col.darkened(0.25))
-			body = iso(p, r * 0.9)
+			draw_prism(p, r * 0.85, r * 1.8, col, col.darkened(0.4))
+			body = project(p, r * 0.9)
 		"splitter":
 			var s := r * 1.2
 			draw_colored_polygon(PackedVector2Array([body + Vector2(0, -s), body + Vector2(r, 0),
@@ -1353,7 +1345,7 @@ func draw_enemy(e: Dictionary) -> void:
 		draw_arc(body, r + 2.0, 0, TAU, 20, Color(0.55, 0.9, 1.0, 0.9), 2.0)
 	if e.hp < e.max_hp:
 		var w := maxf(r * 2.0, 18.0)
-		var top := iso(p, r * 2.0 + 10.0)
+		var top := project(p, r * 2.0 + 10.0)
 		var bar := Rect2(top + Vector2(-w / 2, 0), Vector2(w, 4))
 		draw_rect(bar, Color(0, 0, 0, 0.7))
 		draw_rect(Rect2(bar.position, Vector2(w * maxf(e.hp / e.max_hp, 0.0), 4)), Color("6be675"))
@@ -1363,10 +1355,10 @@ func draw_projectiles() -> void:
 	for p in projectiles:
 		if p.kind == "bolt":
 			var dir: Vector2 = (p.dest - p.pos).normalized()
-			draw_line(iso(p.pos - dir * 8.0, 18.0), iso(p.pos, 18.0), Color("fff1a8"), 3.0)
+			draw_line(project(p.pos - dir * 8.0, 18.0), project(p.pos, 18.0), Color("fff1a8"), 3.0)
 		else:
-			draw_circle(iso(p.pos, 20.0), 5.0, Color("3a2a1a"))
-			draw_circle(iso(p.pos, 20.0), 3.0, Color("eb8a3c"))
+			draw_circle(project(p.pos, 20.0), 5.0, Color("3a2a1a"))
+			draw_circle(project(p.pos, 20.0), 3.0, Color("eb8a3c"))
 
 
 ## `ground`: the flat effects (rings, blasts) drawn on the floor; otherwise the ones in the air.
@@ -1384,9 +1376,9 @@ func draw_effects(ground: bool) -> void:
 			"zap":
 				var pts := PackedVector2Array()
 				for i in fx.pts.size():
-					var q := iso(fx.pts[i], 14.0)
+					var q := project(fx.pts[i], 14.0)
 					if i > 0:
-						var prev := iso(fx.pts[i - 1], 14.0)
+						var prev := project(fx.pts[i - 1], 14.0)
 						var m := (prev + q) * 0.5 + Vector2(randf_range(-6, 6), randf_range(-6, 6))
 						pts.append(m)
 					pts.append(q)

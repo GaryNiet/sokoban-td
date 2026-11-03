@@ -2,20 +2,17 @@ extends RefCounted
 ## Tile rendering shared by the game and the level editor.
 
 
-## `hole_up` / `hole_left`: the neighbouring cell is also a hole, so no inner wall shows on that side.
-static func draw_tile(ci: CanvasItem, r: Rect2, ch: String, checker: bool, t: float,
-		hole_up := false, hole_left := false) -> void:
+## `hole_up`: the cell above is also a hole, so the pit's far inner wall doesn't show.
+static func draw_tile(ci: CanvasItem, r: Rect2, ch: String, checker: bool, t: float, hole_up := false) -> void:
 	if ch == "#":
 		ci.draw_rect(r, Color("2b2f45"))
 		ci.draw_rect(Rect2(r.position, Vector2(r.size.x, 5)), Color("3a3f5c"))
 		return
 	if ch == "O":
-		# a pit: black floor, with the far inner walls visible along the top and left edges
+		# a pit: black floor, with its far inner wall visible along the top edge
 		ci.draw_rect(r, Color("06070c"))
 		if not hole_up:
-			ci.draw_rect(Rect2(r.position, Vector2(r.size.x, r.size.y * 0.32)), Color("1a1d2c"))
-		if not hole_left:
-			ci.draw_rect(Rect2(r.position, Vector2(r.size.x * 0.32, r.size.y)), Color("11131e"))
+			ci.draw_rect(Rect2(r.position, Vector2(r.size.x, r.size.y * 0.35)), Color("1a1d2c"))
 		return
 	ci.draw_rect(r, Color("1c1f2e") if checker else Color("202436"))
 	var cc := r.get_center()
