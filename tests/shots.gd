@@ -25,27 +25,29 @@ func _process(_delta: float) -> bool:
 		5:
 			snap("1_title")
 			main.reset_run()
-			for ty in ["bolt", "frost", "cannon", "tesla", "bolt", "stone"]:
-				main.place_new_block(ty)
-			main.player = Vector2i(4, 5)
-			main.on_board_changed()
-		30:
 			main.banner_t = 0.0
-			snap("2_build")
+		10:
+			snap("2_level1_build")
 			main.start_wave()
-			main.banner_t = 0.0
-			for i in 60 * 5:
+			for i in 60 * 6:
 				main.update_game(1.0 / 60.0, 1.0 / 60.0)
-		40:
-			snap("3_wave")
+		15:
+			snap("3_level1_wave")
+			main.carried = ["bolt", "cannon", "frost"]
+			main.load_level(1)
+			main.banner_t = 0.0
+			main.drop_reward_block("tesla")
 			main.phase = main.Phase.REWARD
-			main.roll_rewards()
-		50:
-			snap("4_reward")
+			main.rewards = [{"kind": "block", "type": "bolt"}, {"kind": "block", "type": "frost"}, {"kind": "rate"}]
+		20:
+			snap("4_level2_reward")
+			main.rewards_hidden = true
+		25:
+			snap("5_level2_reward_hidden")
 			main.carried = ["bolt", "cannon", "frost", "tesla"]
 			main.load_level(2)
 			main.banner_t = 0.0
-		60:
-			snap("5_level3")
+		30:
+			snap("6_level3")
 			return true
 	return false

@@ -2,13 +2,12 @@ extends Node2D
 ## Sokoban TD: push tower blocks to shape the enemy path, then survive the wave.
 
 const Data = preload("res://scripts/data.gd")
+const BoardDraw = preload("res://scripts/board_draw.gd")
 
 const TILE := 48.0
-const W := 16
-const H := 11
-const GRID_OFS := Vector2(16, 56)
-const PANEL_X := 800.0
-const SCREEN := Vector2(1060, 600)
+const BOARD_AREA := Rect2(16, 56, 992, 648)
+const PANEL_X := 1024.0
+const SCREEN := Vector2(1280, 720)
 const NONE := Vector2i(-99, -99)
 const DIRS: Array[Vector2i] = [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
 const ATTACK_TYPES := ["bolt", "cannon", "frost", "tesla"]
@@ -17,16 +16,24 @@ const START_LIVES := 20
 enum Phase { TITLE, BUILD, WAVE, REWARD, GAMEOVER, VICTORY }
 
 var phase: int = Phase.TITLE
+var levels: Array = Data.LEVELS
+var custom := false
 var level_idx := 0
 var wave_idx := 0
 var lives := START_LIVES
 var kills := 0
 
-# Board
+# Board (logic runs in board space: TILE-sized cells from (0, 0); drawing scales it to fit)
+var W := 16
+var H := 11
+var board_pos := BOARD_AREA.position
+var board_scale := 1.0
 var tiles: Array = []
 var spawns: Array[Vector2i] = []
 var goal := Vector2i.ZERO
-var docks: Array[Vector2i] = []
+var tower_spawns: Array[Vector2i] = []
+var spawn_turn := 0  # index of the tower spawn whose turn it is
+var next_spawn := NONE  # where the next reward tower drops, NONE if every spawn is covered
 var deadlocks: Array[Vector2i] = []
 var dist: Dictionary = {}
 var player := Vector2i.ZERO
@@ -50,6 +57,7 @@ var speed := 1.0
 # Run progression
 var carried: Array = []
 var rewards: Array = []
+var rewards_hidden := false
 var level_done := false
 var dmg_mult := {}
 var rate_mult := 1.0
@@ -67,8 +75,11 @@ var font: Font
 
 func _ready() -> void:
 	font = ThemeDB.fallback_font
+	custom = not Data.custom_level.is_empty()
+	levels = [Data.custom_level] if custom else Data.LEVELS
 	reset_run()
-	phase = Phase.TITLE
+	if not custom:
+		phase = Phase.TITLE
 
 
 # ---------------------------------------------------------------- run / level flow
@@ -88,15 +99,22 @@ func load_level(i: int) -> void:
 	level_idx = i
 	wave_idx = 0
 	level_done = false
-	var lv: Dictionary = Data.LEVELS[i]
+	var lv: Dictionary = levels[i]
+	H = lv.map.size()
+	W = 0
+	for line in lv.map:
+		W = maxi(W, line.length())
+	layout_board()
 	tiles = []
 	spawns.clear()
-	docks.clear()
+	tower_spawns.clear()
+	spawn_turn = 0
+	player = NONE
 	for y in H:
 		var row: Array = []
 		var line: String = lv.map[y]
 		for x in W:
-			var ch := line[x]
+			var ch := Data.internal_tile(line[x]) if x < line.length() else "#"
 			var c := Vector2i(x, y)
 			match ch:
 				"S":
@@ -107,10 +125,12 @@ func load_level(i: int) -> void:
 					player = c
 					ch = "."
 				"D":
-					docks.append(c)
+					tower_spawns.append(c)
 					ch = "."
 			row.append(ch)
 		tiles.append(row)
+	if player == NONE:
+		player = default_player_start()
 	deadlocks.clear()
 	for y in H:
 		for x in W:
@@ -124,10 +144,34 @@ func load_level(i: int) -> void:
 	effects.clear()
 	spawn_queue.clear()
 	for type in carried:
-		place_new_block(type)
+		place_carried_block(type)
 	player_draw = cell_center(player)
 	enter_build()
 	show_banner("Level %d: %s" % [i + 1, lv.name])
+
+
+func layout_board() -> void:
+	board_scale = minf(1.0, minf(BOARD_AREA.size.x / (W * TILE), BOARD_AREA.size.y / (H * TILE)))
+	board_pos = BOARD_AREA.position + (BOARD_AREA.size - Vector2(W, H) * TILE * board_scale) / 2.0
+
+
+## Next to the first tower spawn (left side first), so the opening push is obvious.
+func default_player_start() -> Vector2i:
+	var anchor: Vector2i = tower_spawns[0] if not tower_spawns.is_empty() else goal
+	var seen := {anchor: true}
+	var q: Array[Vector2i] = [anchor]
+	var head := 0
+	while head < q.size():
+		var c := q[head]
+		head += 1
+		if tile_at(c) == "." and not c in tower_spawns:
+			return c
+		for dir in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			var n: Vector2i = c + dir
+			if not seen.has(n) and not is_wall(n):
+				seen[n] = true
+				q.append(n)
+	return anchor
 
 
 func enter_build() -> void:
@@ -149,9 +193,9 @@ func start_wave() -> void:
 
 
 func generate_wave(li: int, wi: int) -> Array:
-	var d := wi
+	var d: int = wi + int(levels[li].get("difficulty", 0))
 	for i in li:
-		d += Data.LEVELS[i].waves
+		d += levels[i].waves
 	var hp_scale := 1.0 + 0.2 * d + 0.012 * d * d
 	var count := 5 + int(d * 1.6)
 	var pool := ["grunt"]
@@ -178,7 +222,7 @@ func generate_wave(li: int, wi: int) -> Array:
 				type = pool[k]
 				break
 		q.append({"type": type, "scale": hp_scale, "boss": false})
-	if wi == Data.LEVELS[li].waves - 1:
+	if wi == levels[li].waves - 1:
 		q.append({"type": "brute", "scale": hp_scale * 3.0, "boss": true})
 	return q
 
@@ -186,8 +230,8 @@ func generate_wave(li: int, wi: int) -> Array:
 func wave_cleared() -> void:
 	wave_idx += 1
 	projectiles.clear()
-	if wave_idx >= Data.LEVELS[level_idx].waves:
-		if level_idx >= Data.LEVELS.size() - 1:
+	if wave_idx >= levels[level_idx].waves:
+		if level_idx >= levels.size() - 1:
 			phase = Phase.VICTORY
 			return
 		level_done = true
@@ -196,6 +240,7 @@ func wave_cleared() -> void:
 
 
 func roll_rewards() -> void:
+	rewards_hidden = false
 	var block_pool := ["bolt", "cannon", "frost", "tesla", "stone"]
 	block_pool.shuffle()
 	var others := []
@@ -206,7 +251,13 @@ func roll_rewards() -> void:
 	others.append({"kind": "range"})
 	if lives < START_LIVES:
 		others.append({"kind": "heal"})
+	if others.size() < 3:
+		others.append({"kind": "heal"})
 	others.shuffle()
+	# mid-level, towers need a free tower spawn; with none left the choice is upgrades only
+	if not level_done and next_spawn == NONE:
+		rewards = others.slice(0, 3)
+		return
 	rewards = [{"kind": "block", "type": block_pool[0]}]
 	if randf() < 0.5:
 		rewards.append({"kind": "block", "type": block_pool[1]})
@@ -223,14 +274,10 @@ func choose_reward(i: int) -> void:
 	var bonus := []
 	match r.kind:
 		"block":
-			var n := 2 if r.type == "stone" else 1
-			for k in n:
-				if level_done:
-					bonus.append(r.type)
-				elif place_new_block(r.type):
-					blocks[-1].pop = 1.0
-				else:
-					flash("No room to place the new block!")
+			if level_done:
+				bonus.append(r.type)
+			else:
+				drop_reward_block(r.type)
 		"dmg":
 			dmg_mult[r.type] += 0.3
 		"rate":
@@ -288,15 +335,23 @@ func block_index(c: Vector2i) -> int:
 
 
 func cell_center(c: Vector2i) -> Vector2:
-	return GRID_OFS + (Vector2(c) + Vector2(0.5, 0.5)) * TILE
+	return (Vector2(c) + Vector2(0.5, 0.5)) * TILE
 
 
 func cell_rect(c: Vector2i) -> Rect2:
-	return Rect2(GRID_OFS + Vector2(c) * TILE, Vector2(TILE, TILE))
+	return Rect2(Vector2(c) * TILE, Vector2(TILE, TILE))
+
+
+func to_screen(p: Vector2) -> Vector2:
+	return board_pos + p * board_scale
+
+
+func board_screen_rect() -> Rect2:
+	return Rect2(board_pos, Vector2(W, H) * TILE * board_scale)
 
 
 func world_to_cell(p: Vector2) -> Vector2i:
-	var g := (p - GRID_OFS) / TILE
+	var g := p / TILE
 	var c := Vector2i(floori(g.x), floori(g.y))
 	if c.x < 0 or c.y < 0 or c.x >= W or c.y >= H:
 		return NONE
@@ -376,18 +431,67 @@ func can_place(c: Vector2i) -> bool:
 	return walk_bfs(player, c).has(goal)
 
 
-func place_new_block(type: String) -> bool:
-	var candidates: Array = docks.duplicate()
-	candidates.append_array(walk_bfs(player, NONE))
-	for c in candidates:
-		if can_place(c):
-			blocks.append({
-				"type": type, "cell": c, "draw": cell_center(c), "cd": 0.0,
-				"stats": {}, "locked": false, "pulse": 0.0, "pop": 0.0,
-			})
-			on_board_changed()
+func add_block(type: String, c: Vector2i) -> void:
+	blocks.append({
+		"type": type, "cell": c, "draw": cell_center(c), "cd": 0.0,
+		"stats": {}, "locked": false, "pulse": 0.0, "pop": 0.0,
+	})
+	on_board_changed()
+
+
+## Blocks brought from the previous level start clustered around the first tower spawn,
+## never on a spawn and never where they'd stop a tower from dropping on one.
+func place_carried_block(type: String) -> bool:
+	var anchor: Vector2i = tower_spawns[0] if not tower_spawns.is_empty() else player
+	var fallback := NONE
+	for c in walk_bfs(anchor, NONE):
+		if c in tower_spawns or not can_place(c):
+			continue
+		if fallback == NONE:
+			fallback = c
+		add_block(type, c)
+		if tower_spawns.all(spawn_usable):
 			return true
+		blocks.pop_back()
+	if fallback != NONE:
+		add_block(type, fallback)
+		return true
+	on_board_changed()
 	return false
+
+
+## A tower could drop on this spawn without sealing the enemy path.
+func spawn_usable(c: Vector2i) -> bool:
+	var d := path_field(c, NONE)
+	return spawns.all(func(s): return d.has(s))
+
+
+## The tower spawn whose turn it is, skipping covered ones (or ones that would seal the path).
+func find_next_spawn() -> int:
+	for k in tower_spawns.size():
+		var i := (spawn_turn + k) % tower_spawns.size()
+		var c := tower_spawns[i]
+		if block_index(c) < 0 and spawn_usable(c):
+			return i
+	return -1
+
+
+func drop_reward_block(type: String) -> void:
+	var i := find_next_spawn()
+	if i < 0:
+		flash("Every tower spawn is covered!")
+		return
+	var c := tower_spawns[i]
+	if player == c:
+		# step the player off the spawn so the tower has room
+		for n in walk_bfs(player, NONE):
+			if n != c:
+				player = n
+				break
+	add_block(type, c)
+	blocks[-1].pop = 1.0
+	spawn_turn = (i + 1) % tower_spawns.size()
+	on_board_changed()
 
 
 func on_board_changed() -> void:
@@ -395,6 +499,8 @@ func on_board_changed() -> void:
 	compute_stats()
 	for b in blocks:
 		b.locked = is_locked(b.cell)
+	var i := find_next_spawn()
+	next_spawn = tower_spawns[i] if i >= 0 else NONE
 
 
 # ---------------------------------------------------------------- stats & combos
@@ -490,15 +596,24 @@ func compute_stats() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
 		var k: int = event.keycode
+		if k == KEY_ESCAPE and custom:
+			open_editor()
+			return
 		match phase:
 			Phase.TITLE:
 				if not event.echo and k in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
 					reset_run()
+				elif k == KEY_E:
+					open_editor()
 			Phase.GAMEOVER, Phase.VICTORY:
 				if not event.echo and k in [KEY_ENTER, KEY_KP_ENTER, KEY_R]:
 					reset_run()
+				elif k == KEY_E:
+					open_editor()
 			Phase.REWARD:
-				if k >= KEY_1 and k <= KEY_3:
+				if not event.echo and k in [KEY_H, KEY_TAB]:
+					rewards_hidden = not rewards_hidden
+				elif not rewards_hidden and k >= KEY_1 and k < KEY_1 + rewards.size():
 					choose_reward(k - KEY_1)
 			Phase.BUILD, Phase.WAVE:
 				var dir := key_dir(k)
@@ -514,12 +629,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		var m := get_local_mouse_position()
 		match phase:
 			Phase.REWARD:
+				if rewards_hidden:
+					if hidden_bar_rect().has_point(m):
+						rewards_hidden = false
+					return
+				if hide_button_rect().has_point(m):
+					rewards_hidden = true
+					return
 				for i in rewards.size():
 					if card_rect(i).has_point(m):
 						choose_reward(i)
 						return
 			Phase.TITLE, Phase.GAMEOVER, Phase.VICTORY:
 				reset_run()
+
+
+func open_editor() -> void:
+	get_tree().change_scene_to_file("res://editor.tscn")
 
 
 func key_dir(k: int) -> Vector2i:
@@ -598,7 +724,7 @@ func show_banner(text: String) -> void:
 
 func _process(delta: float) -> void:
 	t += delta
-	hover = world_to_cell(get_local_mouse_position())
+	hover = world_to_cell((get_local_mouse_position() - board_pos) / board_scale)
 	update_game(delta * (speed if phase == Phase.WAVE else 1.0), delta)
 	queue_redraw()
 
@@ -821,7 +947,9 @@ func hurt(e: Dictionary, amount: float) -> void:
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, SCREEN), Color("141621"))
+	draw_set_transform(board_pos, 0.0, Vector2(board_scale, board_scale))
 	draw_board()
+	draw_tower_spawns()
 	draw_path_preview()
 	draw_ranges()
 	draw_blocks()
@@ -830,18 +958,23 @@ func _draw() -> void:
 	draw_enemies()
 	draw_projectiles()
 	draw_effects()
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	draw_top_bar()
 	draw_panel()
 	if banner_t > 0.0 and phase in [Phase.BUILD, Phase.WAVE]:
 		var a := clampf(banner_t, 0.0, 1.0)
-		var board_w := W * TILE
-		draw_rect(Rect2(GRID_OFS + Vector2(0, H * TILE * 0.5 - 34), Vector2(board_w, 60)), Color(0, 0, 0, 0.55 * a))
-		text(banner, GRID_OFS + Vector2(0, H * TILE * 0.5 + 6), 30, Color(1, 1, 1, a), board_w, HORIZONTAL_ALIGNMENT_CENTER)
+		var br := board_screen_rect()
+		var mid := br.get_center().y
+		draw_rect(Rect2(br.position.x, mid - 34, br.size.x, 60), Color(0, 0, 0, 0.55 * a))
+		text(banner, Vector2(br.position.x, mid + 6), 30, Color(1, 1, 1, a), br.size.x, HORIZONTAL_ALIGNMENT_CENTER)
 	match phase:
 		Phase.TITLE:
 			draw_title()
 		Phase.REWARD:
-			draw_rewards()
+			if rewards_hidden:
+				draw_hidden_rewards_bar()
+			else:
+				draw_rewards()
 		Phase.GAMEOVER:
 			draw_end_screen("THE CORE HAS FALLEN", Color("e05555"))
 		Phase.VICTORY:
@@ -856,51 +989,25 @@ func text(s: String, pos: Vector2, size := 16, col := Color.WHITE, width := -1.0
 func draw_board() -> void:
 	for y in H:
 		for x in W:
-			var c := Vector2i(x, y)
-			var r := cell_rect(c)
-			var ch: String = tiles[y][x]
-			if ch == "#":
-				draw_rect(r, Color("2b2f45"))
-				draw_rect(Rect2(r.position, Vector2(TILE, 5)), Color("3a3f5c"))
-				continue
-			draw_rect(r, Color("1c1f2e") if (x + y) % 2 == 0 else Color("202436"))
-			var cc := cell_center(c)
-			match ch:
-				"*":
-					draw_rect(r.grow(-3), Color(1, 0.8, 0.3, 0.10 + 0.06 * sin(t * 3.0)))
-					draw_rect(r.grow(-3), Color("f2c94c"), false, 2.0)
-					draw_star(cc, 8.0, Color(0.95, 0.79, 0.3, 0.8))
-				"S":
-					for i in 3:
-						var k := fmod(t * 0.8 + i / 3.0, 1.0)
-						draw_arc(cc, 4.0 + k * 18.0, 0, TAU, 24, Color(1, 0.35, 0.35, 1.0 - k), 2.0)
-					draw_circle(cc, 6.0, Color("e05555"))
-				"G":
-					var s := 15.0 + sin(t * 2.5) * 2.0
-					draw_colored_polygon(PackedVector2Array([cc + Vector2(0, -s), cc + Vector2(s * 0.75, 0),
-						cc + Vector2(0, s), cc + Vector2(-s * 0.75, 0)]), Color("4fd1c5"))
-					draw_circle(cc, 4.0, Color.WHITE)
+			BoardDraw.draw_tile(self, cell_rect(Vector2i(x, y)), tiles[y][x], (x + y) % 2 == 0, t)
 	# corner brackets mark "premium" cells: a block pushed there is stuck forever
 	for c in deadlocks:
-		if block_index(c) >= 0:
-			continue
-		var r := cell_rect(c).grow(-6)
-		var col := Color(1, 1, 1, 0.13)
-		var corner := Vector2(
-			r.position.x if is_hard(c + Vector2i.LEFT) else r.end.x,
-			r.position.y if is_hard(c + Vector2i.UP) else r.end.y)
-		var sx := 1.0 if corner.x == r.position.x else -1.0
-		var sy := 1.0 if corner.y == r.position.y else -1.0
-		draw_line(corner, corner + Vector2(10 * sx, 0), col, 2.0)
-		draw_line(corner, corner + Vector2(0, 10 * sy), col, 2.0)
+		if block_index(c) < 0:
+			BoardDraw.draw_corner_mark(self, cell_rect(c), is_hard(c + Vector2i.LEFT), is_hard(c + Vector2i.UP))
 
 
-func draw_star(c: Vector2, r: float, col: Color) -> void:
-	var pts := PackedVector2Array()
-	for i in 10:
-		var a := -PI / 2 + i * PI / 5
-		pts.append(c + Vector2(cos(a), sin(a)) * (r if i % 2 == 0 else r * 0.45))
-	draw_colored_polygon(pts, col)
+func draw_tower_spawns() -> void:
+	for c in tower_spawns:
+		var r := cell_rect(c).grow(-5)
+		var cc := r.get_center()
+		var col := Color(0.55, 0.85, 0.65, 0.45)
+		if c == next_spawn and phase != Phase.TITLE:
+			var a := 0.5 + 0.5 * sin(t * 4.0)
+			draw_rect(r, Color(1, 0.8, 0.3, 0.12 + 0.12 * a))
+			col = Color(1, 0.82, 0.35, 0.6 + 0.4 * a)
+		draw_rect(r, col, false, 2.0)
+		draw_line(cc + Vector2(-7, 0), cc + Vector2(7, 0), col, 2.0)
+		draw_line(cc + Vector2(0, -7), cc + Vector2(0, 7), col, 2.0)
 
 
 func draw_path_preview() -> void:
@@ -1085,18 +1192,21 @@ func draw_effects() -> void:
 
 
 func draw_top_bar() -> void:
-	var lv: Dictionary = Data.LEVELS[level_idx]
-	text("LEVEL %d  ·  %s" % [level_idx + 1, lv.name.to_upper()], Vector2(18, 36), 20, Color("e8e8f0"))
+	var lv: Dictionary = levels[level_idx]
+	var title := "PLAYTEST  ·  %s" % lv.name.to_upper() if custom else "LEVEL %d  ·  %s" % [level_idx + 1, lv.name.to_upper()]
+	text(title, Vector2(18, 36), 20, Color("e8e8f0"))
 	var hint := ""
 	match phase:
 		Phase.BUILD:
 			hint = "BUILD - push blocks, SPACE to send the wave"
 		Phase.WAVE:
 			hint = "WAVE IN PROGRESS - blocks are frozen   (F: speed x%d)" % int(speed)
+	if custom and phase == Phase.BUILD:
+		hint = "Esc: back to editor  ·  " + hint
 	if message_t > 0.0:
-		text(message, Vector2(300, 36), 16, Color(1, 0.85, 0.4, clampf(message_t, 0.0, 1.0)), 484, HORIZONTAL_ALIGNMENT_RIGHT)
+		text(message, Vector2(300, 36), 16, Color(1, 0.85, 0.4, clampf(message_t, 0.0, 1.0)), PANEL_X - 316, HORIZONTAL_ALIGNMENT_RIGHT)
 	else:
-		text(hint, Vector2(300, 36), 15, Color("9aa0bc"), 484, HORIZONTAL_ALIGNMENT_RIGHT)
+		text(hint, Vector2(300, 36), 15, Color("9aa0bc"), PANEL_X - 316, HORIZONTAL_ALIGNMENT_RIGHT)
 
 
 func draw_panel() -> void:
@@ -1105,7 +1215,7 @@ func draw_panel() -> void:
 	draw_line(Vector2(x - 4, 0), Vector2(x - 4, SCREEN.y), Color("2b2f45"), 2.0)
 	text("SOKOBAN TD", Vector2(x + 12, 36), 24, Color("f2c94c"))
 	var y := 70.0
-	var lv: Dictionary = Data.LEVELS[level_idx]
+	var lv: Dictionary = levels[level_idx]
 	text("Lives", Vector2(x + 12, y), 15, Color("9aa0bc"))
 	text(str(lives), Vector2(x + 70, y), 18, Color("e05555") if lives <= 5 else Color.WHITE)
 	text("Wave", Vector2(x + 130, y), 15, Color("9aa0bc"))
@@ -1113,6 +1223,12 @@ func draw_panel() -> void:
 	y += 22
 	text("Kills %d   Path %d tiles" % [kills, dist.get(spawns[0], 0) if not spawns.is_empty() else 0],
 		Vector2(x + 12, y), 14, Color("9aa0bc"))
+	if not tower_spawns.is_empty():
+		y += 20
+		if next_spawn != NONE:
+			text("Next tower drops on the glowing spawn", Vector2(x + 12, y), 12, Color("e0c070"))
+		else:
+			text("All tower spawns covered: upgrades only", Vector2(x + 12, y), 12, Color("e07070"))
 
 	# next wave preview / live count
 	y += 30
@@ -1160,11 +1276,11 @@ func draw_panel() -> void:
 	if range_bonus > 0.0:
 		ups.append("Range +%.1f" % range_bonus)
 	if not ups.is_empty():
-		draw_multiline_string(font, Vector2(x + 12, 470), "Upgrades: " + ", ".join(ups),
+		draw_multiline_string(font, Vector2(x + 12, SCREEN.y - 140), "Upgrades: " + ", ".join(ups),
 			HORIZONTAL_ALIGNMENT_LEFT, 230, 12, 3, Color("8fd18f"))
 
-	var controls := "Move/push: WASD or arrows\nZ undo  ·  SPACE start wave\nF speed  ·  Shift show ranges\nHover a block for stats"
-	draw_multiline_string(font, Vector2(x + 12, 520), controls, HORIZONTAL_ALIGNMENT_LEFT, 236, 12, -1, Color("6c7290"))
+	var controls := "Move/push: WASD or arrows\nZ undo  ·  SPACE start wave\nF speed  ·  Shift show ranges\nH hide/show rewards  ·  hover for stats"
+	draw_multiline_string(font, Vector2(x + 12, SCREEN.y - 80), controls, HORIZONTAL_ALIGNMENT_LEFT, 236, 12, -1, Color("6c7290"))
 
 
 func draw_inspector(x: float, y: float) -> float:
@@ -1202,7 +1318,9 @@ func draw_inspector(x: float, y: float) -> float:
 	if hover != NONE:
 		var ch := tile_at(hover)
 		var info := ""
-		if ch == "*":
+		if hover in tower_spawns:
+			info = "TOWER SPAWN\nReward towers drop on spawns in turn. A spawn with a block on it is skipped."
+		elif ch == "*":
 			info = "POWER TILE\nA tower here deals +50% damage and gets +0.5 range."
 		elif hover in deadlocks:
 			info = "CORNER\nA block pushed here can never be moved again."
@@ -1214,7 +1332,7 @@ func draw_inspector(x: float, y: float) -> float:
 			draw_multiline_string(font, Vector2(x, y), info, HORIZONTAL_ALIGNMENT_LEFT, 230, 13, 4, Color("b8bdd6"))
 			return y + 60
 	if phase == Phase.BUILD:
-		draw_multiline_string(font, Vector2(x, y), Data.LEVELS[level_idx].tip, HORIZONTAL_ALIGNMENT_LEFT,
+		draw_multiline_string(font, Vector2(x, y), levels[level_idx].tip, HORIZONTAL_ALIGNMENT_LEFT,
 			230, 13, 4, Color("7f86a6"))
 		y += 60
 	# block inventory
@@ -1237,28 +1355,37 @@ func dim() -> void:
 func draw_title() -> void:
 	dim()
 	var cx := SCREEN.x / 2
-	text("SOKOBAN TD", Vector2(0, 150), 56, Color("f2c94c"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
-	text("push  ·  block  ·  defend", Vector2(0, 186), 18, Color("9aa0bc"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	text("SOKOBAN TD", Vector2(0, 210), 56, Color("f2c94c"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	text("push  ·  block  ·  defend", Vector2(0, 246), 18, Color("9aa0bc"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 	var lines := "Your towers are crates. Push them like Sokoban to reshape the enemy path.\n" + \
 		"Blocks can't move while enemies are on the field - plan during the build phase.\n" + \
 		"Corners are forever: a block pushed into one can never come back out.\n" + \
-		"Matching neighbours create combos. Each cleared wave grants a reward.\n" + \
+		"Each cleared wave grants a reward. New towers drop on the tower spawns in turn -\n" + \
+		"keep a spawn covered and it gets skipped. Neighbouring towers create combos.\n" + \
 		"Survive 3 levels to win the run."
-	draw_multiline_string(font, Vector2(cx - 330, 240), lines, HORIZONTAL_ALIGNMENT_CENTER, 660, 16, -1, Color("d0d4e8"))
+	draw_multiline_string(font, Vector2(cx - 340, 300), lines, HORIZONTAL_ALIGNMENT_CENTER, 680, 16, -1, Color("d0d4e8"))
 	var a := 0.6 + 0.4 * sin(t * 4.0)
-	text("Press ENTER to begin", Vector2(0, 420), 22, Color(1, 1, 1, a), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	text("Press ENTER to begin", Vector2(0, 500), 22, Color(1, 1, 1, a), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	text("E: level editor", Vector2(0, 536), 15, Color("9aa0bc"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func card_rect(i: int) -> Rect2:
-	return Rect2(SCREEN.x / 2 - 405 + i * 280, 190, 250, 240)
+	return Rect2(SCREEN.x / 2 - 405 + i * 280, 200, 250, 240)
+
+
+func hide_button_rect() -> Rect2:
+	return Rect2(SCREEN.x / 2 - 110, 470, 220, 34)
+
+
+func hidden_bar_rect() -> Rect2:
+	return Rect2(SCREEN.x / 2 - 260, SCREEN.y - 58, 520, 42)
 
 
 func reward_info(r: Dictionary) -> Array:
 	match r.kind:
 		"block":
 			var def: Dictionary = Data.TOWERS[r.type]
-			var title: String = def.name + (" x2" if r.type == "stone" else "")
-			return ["NEW BLOCK", title, def.desc, def.color]
+			return ["NEW BLOCK", def.name, def.desc, def.color]
 		"dmg":
 			var def: Dictionary = Data.TOWERS[r.type]
 			return ["UPGRADE", def.name + " +", "All %ss deal +30%% damage." % def.name, def.color]
@@ -1274,9 +1401,15 @@ func reward_info(r: Dictionary) -> Array:
 func draw_rewards() -> void:
 	dim()
 	var head := "LEVEL CLEARED!" if level_done else "WAVE CLEARED!"
-	text(head, Vector2(0, 120), 36, Color("f2c94c"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
-	var sub := "Choose a reward - your blocks travel with you to the next level." if level_done else "Choose a reward"
-	text(sub, Vector2(0, 155), 16, Color("9aa0bc"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	text(head, Vector2(0, 130), 36, Color("f2c94c"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	var sub := "Choose a reward"
+	if level_done:
+		sub = "Choose a reward - your blocks travel with you to the next level."
+	elif rewards.any(func(r): return r.kind == "block"):
+		sub = "Choose a reward - a new tower drops on the glowing spawn"
+	elif not tower_spawns.is_empty():
+		sub = "Every tower spawn is covered - clear one to get towers again"
+	text(sub, Vector2(0, 165), 16, Color("9aa0bc"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 	var m := get_local_mouse_position()
 	for i in rewards.size():
 		var r := card_rect(i)
@@ -1303,15 +1436,43 @@ func draw_rewards() -> void:
 		draw_multiline_string(font, r.position + Vector2(18, 170), info[2], HORIZONTAL_ALIGNMENT_CENTER,
 			r.size.x - 36, 14, 3, Color("d0d4e8"))
 		text("[%d]" % (i + 1), r.position + Vector2(0, r.size.y - 14), 14, Color("6c7290"), r.size.x, HORIZONTAL_ALIGNMENT_CENTER)
+	var hb := hide_button_rect()
+	draw_rect(hb, Color("232740") if hb.has_point(m) else Color("1c1f33"))
+	draw_rect(hb, Color("6c7290"), false, 1.5)
+	text("Hide to view the field  [H]", hb.position + Vector2(0, 22), 14, Color("b8bdd6"), hb.size.x, HORIZONTAL_ALIGNMENT_CENTER)
+	draw_spawn_marker()
+
+
+func draw_hidden_rewards_bar() -> void:
+	var r := hidden_bar_rect()
+	var a := 0.75 + 0.25 * sin(t * 4.0)
+	draw_rect(r, Color(0.09, 0.1, 0.16, 0.92))
+	draw_rect(r, Color(0.95, 0.79, 0.3, a), false, 2.0)
+	text("Reward waiting - press H or click here to choose", r.position + Vector2(0, 27), 16,
+		Color("f2c94c"), r.size.x, HORIZONTAL_ALIGNMENT_CENTER)
+	draw_spawn_marker()
+
+
+## Points out where a tower reward will land, drawn above the reward overlay.
+func draw_spawn_marker() -> void:
+	if level_done or next_spawn == NONE or not rewards.any(func(r): return r.kind == "block"):
+		return
+	var p := to_screen(cell_center(next_spawn))
+	var s := TILE * board_scale
+	var k := fmod(t * 1.2, 1.0)
+	draw_arc(p, s * (0.45 + 0.5 * k), 0, TAU, 32, Color(1, 0.82, 0.35, 1.0 - k), 3.0)
+	draw_rect(Rect2(p - Vector2(s, s) * 0.42, Vector2(s, s) * 0.84), Color(1, 0.82, 0.35, 0.9), false, 2.5)
 
 
 func draw_end_screen(title: String, col: Color) -> void:
 	dim()
-	text(title, Vector2(0, 220), 48, col, SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
-	var lv: Dictionary = Data.LEVELS[level_idx]
+	text(title, Vector2(0, 280), 48, col, SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	var lv: Dictionary = levels[level_idx]
 	var sub := "Reached level %d (%s), wave %d  ·  %d enemies destroyed  ·  %d blocks" % [
 		level_idx + 1, lv.name, mini(wave_idx + 1, lv.waves), kills, blocks.size()]
 	if phase == Phase.VICTORY:
-		sub = "All 3 levels survived with %d lives left  ·  %d enemies destroyed  ·  %d blocks" % [lives, kills, blocks.size()]
-	text(sub, Vector2(0, 270), 16, Color("d0d4e8"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
-	text("Press R to start a new run", Vector2(0, 340), 20, Color(1, 1, 1, 0.6 + 0.4 * sin(t * 4.0)), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+		sub = "%s with %d lives left  ·  %d enemies destroyed  ·  %d blocks" % [
+			"Level beaten" if custom else "All %d levels survived" % levels.size(), lives, kills, blocks.size()]
+	text(sub, Vector2(0, 330), 16, Color("d0d4e8"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
+	var again := "R: retry  ·  E or Esc: back to editor" if custom else "R: new run  ·  E: level editor"
+	text(again, Vector2(0, 400), 20, Color(1, 1, 1, 0.6 + 0.4 * sin(t * 4.0)), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
