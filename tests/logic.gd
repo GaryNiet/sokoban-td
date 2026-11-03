@@ -2,6 +2,8 @@ extends SceneTree
 ## Rule checks for pushing, locking, path sealing, undo, combos, tower spawns and rewards.
 ## godot --headless --path . -s tests/logic.gd
 
+const Data = preload("res://scripts/data.gd")
+
 var main
 var failures := 0
 
@@ -22,11 +24,24 @@ func put(type: String, c: Vector2i) -> Dictionary:
 	return main.blocks[-1]
 
 
-func key(k: int) -> void:
+func key(k: int, echo := false) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = k
 	ev.pressed = true
+	ev.echo = echo
 	main._unhandled_input(ev)
+
+
+func release(k: int) -> void:
+	var ev := InputEventKey.new()
+	ev.keycode = k
+	main._unhandled_input(ev)
+
+
+func frames(seconds: float) -> void:
+	for i in int(seconds * 60):
+		main.update_game(1.0 / 60.0, 1.0 / 60.0)
+
 
 
 func _process(_delta: float) -> bool:
@@ -45,8 +60,7 @@ func _process(_delta: float) -> bool:
 	check(main.blocks[-1].cell == T and main.player != T, "reward tower drops on the spawn")
 	check(main.next_spawn == main.NONE, "covered spawn is not suggested")
 	main.roll_rewards()
-	check(main.rewards.size() == 3 and main.rewards.all(func(r): return r.kind != "block"),
-		"all spawns covered -> upgrades only")
+	check(main.rewards == [{"kind": "heal"}], "all spawns covered -> repair only")
 
 	# push the tower off the spawn and it becomes available again
 	main.player = Vector2i(17, 2)
@@ -87,6 +101,18 @@ func _process(_delta: float) -> bool:
 	put("stone", Vector2i(5, 3))
 	check(is_equal_approx(w.stats.range, 3.3), "stone Bulwark adds range")
 
+	# upgrade blocks boost every tower touching them, whatever its kind
+	var cn := put("cannon", Vector2i(7, 2))
+	var amp := put("amp", Vector2i(6, 2))
+	check(is_equal_approx(w.stats.dmg, 19.5) and is_equal_approx(cn.stats.dmg, 28.6), "Amplifier boosts a bolt and a cannon")
+	check(amp.stats.notes == ["Boosting 2 towers"], "Amplifier shows how many towers it boosts")
+	put("lens", Vector2i(4, 1))
+	check(is_equal_approx(tz.stats.range, 3.15), "Lens adds range")
+	main.blocks.pop_back()
+	main.blocks.pop_back()
+	main.blocks.pop_back()
+	main.on_board_changed()
+
 	# ---- level 2: two tower spawns take turns
 	main.carried = ["bolt"]
 	main.load_level(1)
@@ -110,8 +136,7 @@ func _process(_delta: float) -> bool:
 	main.blocks[-2].cell = t1 + Vector2i.UP
 	main.on_board_changed()
 	var target: Vector2i = main.next_spawn
-	main.level_done = false
-	main.rewards = [{"kind": "block", "type": "bolt"}, {"kind": "block", "type": "cannon"}, {"kind": "rate"}]
+	main.rewards = [{"kind": "block", "type": "bolt"}, {"kind": "block", "type": "cannon"}, {"kind": "heal"}]
 	main.choose_reward(1)
 	check(main.blocks[-1].type == "cannon" and main.blocks[-1].cell == target, "chosen tower lands on the announced spawn")
 
@@ -137,6 +162,67 @@ func _process(_delta: float) -> bool:
 	main.load_level(2)
 	check(main.W == 22 and main.H == 10 and main.dist.has(main.spawns[0]), "level 3 loads with a path")
 	check(main.tower_spawns == [Vector2i(14, 5)], "level 3 tower spawn")
+
+	# ---- level select: each level is its own run, winning goes back to the menu
+	check(Data.LEVELS.all(func(lv): return lv.waves >= 20), "levels are 20+ waves")
+	main.to_menu()
+	check(main.phase == main.Phase.TITLE, "game opens on the level select")
+	key(KEY_DOWN)
+	check(main.select_idx == 1 and main.level_idx == 1 and main.phase == main.Phase.TITLE, "arrows pick a level")
+	key(KEY_ENTER)
+	check(main.phase == main.Phase.BUILD and main.level_idx == 1 and main.blocks.size() == 1, "ENTER starts that level fresh")
+	main.wave_idx = main.levels[1].waves - 1
+	main.wave_cleared()
+	check(main.phase == main.Phase.VICTORY and main.level_idx == 1, "last wave wins without moving to the next level")
+	key(KEY_ENTER)
+	check(main.phase == main.Phase.TITLE and main.select_idx == 1, "winning returns to the level select")
+	key(KEY_3)
+	check(main.phase == main.Phase.BUILD and main.level_idx == 2, "number keys start a level directly")
+	key(KEY_ESCAPE)
+	check(main.phase == main.Phase.TITLE, "Esc leaves a level")
+
+	# ---- movement: taps queue up, holding never does
+	main.reset_run()
+	key(KEY_UP)
+	for i in 5:
+		key(KEY_UP, true)
+	check(main.move_queue.size() == 1, "OS key repeat does not fill the buffer")
+	release(KEY_UP)
+	check(main.held_key == 0, "releasing stops the hold")
+	for i in 8:
+		key(KEY_DOWN)
+		release(KEY_DOWN)
+	check(main.move_queue.size() == main.MOVE_BUFFER, "taps queue up to the buffer size")
+	frames(1.0)
+	check(main.move_queue.is_empty(), "queued taps play out")
+	key(KEY_LEFT)
+	frames(0.6)
+	check(main.move_queue.is_empty(), "holding keeps the buffer empty")
+	release(KEY_LEFT)
+	frames(0.1)
+	var stop: Vector2i = main.player
+	frames(0.5)
+	check(main.player == stop, "player stops once the key is let go")
+
+	# ---- holes (The Pits: a 2-wide chasm in columns 8-9, open only along row 7)
+	main.load_level(3)
+	check(main.tile_at(Vector2i(8, 1)) == "O" and not main.dist.has(Vector2i(8, 2)), "enemies route around holes")
+	main.blocks.clear()
+	put("bolt", Vector2i(6, 1))
+	main.player = Vector2i(7, 2)
+	main.try_move(Vector2i.RIGHT)
+	check(main.player == Vector2i(7, 2), "the player can't walk into a hole")
+	main.player = Vector2i(5, 1)
+	main.try_move(Vector2i.RIGHT)
+	main.try_move(Vector2i.RIGHT)
+	check(main.tile_at(Vector2i(8, 1)) == "." and main.blocks.is_empty() and main.player == Vector2i(7, 1),
+		"a pushed block falls in and fills the hole")
+	check(main.filled.get(Vector2i(8, 1)) == "bolt" and main.dist.has(Vector2i(8, 1)), "the filled hole is floor now")
+	main.try_move(Vector2i.RIGHT)
+	check(main.player == Vector2i(8, 1), "the player can walk over a filled hole")
+	main.undo()
+	check(main.tile_at(Vector2i(8, 1)) == "O" and main.blocks.size() == 1 and main.blocks[0].cell == Vector2i(7, 1),
+		"undo brings the hole and the block back")
 
 	print("FAILURES: %d" % failures)
 	return true

@@ -23,7 +23,7 @@ func _process(_delta: float) -> bool:
 	step += 1
 	match step:
 		5:
-			snap("1_title")
+			snap("1_level_select")
 			main.reset_run()
 			main.banner_t = 0.0
 		10:
@@ -38,7 +38,7 @@ func _process(_delta: float) -> bool:
 			main.banner_t = 0.0
 			main.drop_reward_block("tesla")
 			main.phase = main.Phase.REWARD
-			main.rewards = [{"kind": "block", "type": "bolt"}, {"kind": "block", "type": "frost"}, {"kind": "rate"}]
+			main.rewards = [{"kind": "block", "type": "bolt"}, {"kind": "block", "type": "amp"}, {"kind": "heal"}]
 		20:
 			snap("4_level2_reward")
 			main.rewards_hidden = true
@@ -49,5 +49,9 @@ func _process(_delta: float) -> bool:
 			main.banner_t = 0.0
 		30:
 			snap("6_level3")
+			main.load_level(3)
+			main.banner_t = 0.0
+		35:
+			snap("7_pits")
 			return true
 	return false

@@ -31,6 +31,22 @@ const TOWERS := {
 		"dmg": 0.0, "rate": 0.0, "range": 0.0,
 		"desc": "Pure blocker. Towers touching it get +0.5 range.",
 	},
+	# Upgrade blocks don't attack. They boost every tower touching them, whatever its kind.
+	"amp": {
+		"name": "Amplifier", "color": Color("e0566b"),
+		"dmg": 0.0, "rate": 0.0, "range": 0.0, "boost": "+30% damage",
+		"desc": "Upgrade. Every tower touching it deals +30% damage.",
+	},
+	"clock": {
+		"name": "Overclock", "color": Color("4fd18b"),
+		"dmg": 0.0, "rate": 0.0, "range": 0.0, "boost": "+25% fire rate",
+		"desc": "Upgrade. Every tower touching it fires 25% faster.",
+	},
+	"lens": {
+		"name": "Lens", "color": Color("5aa0f2"),
+		"dmg": 0.0, "rate": 0.0, "range": 0.0, "boost": "+0.75 range",
+		"desc": "Upgrade. Every tower touching it gets +0.75 range.",
+	},
 }
 
 const ENEMIES := {
@@ -41,7 +57,7 @@ const ENEMIES := {
 	"splitling": {"name": "Splitling", "hp": 12.0, "speed": 2.4, "armor": 0.0, "size": 0.16, "color": Color("f0a8e4"), "gap": 0.4},
 }
 
-# Keyed by the two tower types sorted alphabetically. Stone pairs are handled in code.
+# Keyed by the two tower types sorted alphabetically. Stone and upgrade pairs are handled in code.
 const COMBOS := {
 	"bolt+bolt": {"name": "Volley", "desc": "+35% fire rate"},
 	"cannon+cannon": {"name": "Barrage", "desc": "+50% splash radius"},
@@ -60,11 +76,13 @@ const COMBOS := {
 #   T  tower spawn: reward towers drop here, taking turns between spawns; a covered spawn is skipped
 #   P  player start (optional - defaults to next to the first tower spawn)
 #   *  power tile: +50% damage / +0.5 range
+#   O  hole: nobody can walk over it; push a block in to fill it (the block is lost)
 # Older maps used # for walls, G for the core and D for tower spawns; those still load.
 const LEVELS := [
 	{
 		"name": "The Corridor",
-		"waves": 4,
+		"waves": 20,
+		"difficulty": 0,
 		"tip": "One long hall. Push towers into the lane to make enemies weave past them.",
 		"map": [
 			"----------------------",
@@ -76,7 +94,8 @@ const LEVELS := [
 	},
 	{
 		"name": "Split Wall",
-		"waves": 5,
+		"waves": 20,
+		"difficulty": 2,
 		"tip": "A wall with a single gap. New towers alternate between the two spawns.",
 		"map": [
 			"----------------------",
@@ -88,7 +107,8 @@ const LEVELS := [
 	},
 	{
 		"name": "The Comb",
-		"waves": 6,
+		"waves": 20,
+		"difficulty": 4,
 		"tip": "Enemies snake through the comb before reaching the open field.",
 		"map": [
 			"----------------------",
@@ -101,6 +121,23 @@ const LEVELS := [
 			"-.-..................A",
 			"-...-................-",
 			"----------------------",
+		],
+	},
+	{
+		"name": "The Pits",
+		"waves": 20,
+		"difficulty": 3,
+		"tip": "A chasm splits the field. Walk around the bottom, or push blocks in to fill a bridge.",
+		"map": [
+			"--------------------",
+			"S.......OO.........-",
+			"-.......OO....T....-",
+			"-..T....OO.........-",
+			"-.......OO.........A",
+			"-.......OO.........-",
+			"-.......OO.........-",
+			"-..................-",
+			"--------------------",
 		],
 	},
 ]

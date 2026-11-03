@@ -23,6 +23,7 @@ const TOOLS := [
 	{"ch": "D", "name": "Tower spawn", "color": Color("8fd9a8")},
 	{"ch": "P", "name": "Player (opt.)", "color": Color("3fbf7f")},
 	{"ch": "*", "name": "Power tile", "color": Color("f2c94c")},
+	{"ch": "O", "name": "Hole", "color": Color("06070c")},
 ]
 
 var map: Array = []  # rows of single-character internal tiles (# wall, G core, D tower spawn)
@@ -31,7 +32,7 @@ var H := 11
 var board_pos := BOARD_AREA.position
 var board_scale := 1.0
 var level_name := "My Level"
-var waves := 5
+var waves := 20
 var difficulty := 0
 var tool := 0
 var painting := 0  # 0 idle, 1 paint, 2 erase
@@ -72,7 +73,7 @@ func build_ui() -> void:
 	name_edit.text_changed.connect(func(s: String): level_name = s)
 	add_child(name_edit)
 	button("-", Rect2(x + 128, 102, 28, 24), func(): waves = maxi(1, waves - 1))
-	button("+", Rect2(x + 208, 102, 28, 24), func(): waves = mini(12, waves + 1))
+	button("+", Rect2(x + 208, 102, 28, 24), func(): waves = mini(40, waves + 1))
 	button("-", Rect2(x + 128, 130, 28, 24), func(): difficulty = maxi(0, difficulty - 1))
 	button("+", Rect2(x + 208, 130, 28, 24), func(): difficulty = mini(15, difficulty + 1))
 	button("-", Rect2(x + 128, 158, 28, 24), func(): resize(W - 1, H))
@@ -112,7 +113,7 @@ func tool_rect(i: int) -> Rect2:
 # ---------------------------------------------------------------- level data
 
 func new_level() -> void:
-	set_level({"name": "My Level", "waves": 5, "difficulty": 0, "map": [
+	set_level({"name": "My Level", "waves": 20, "difficulty": 0, "map": [
 		"----------------------",
 		"-....................-",
 		"-....................-",
@@ -135,7 +136,7 @@ func set_level(lv: Dictionary) -> void:
 		map.append(row)
 	fit_map()
 	level_name = lv.get("name", "My Level")
-	waves = int(lv.get("waves", 5))
+	waves = int(lv.get("waves", 20))
 	difficulty = int(lv.get("difficulty", 0))
 	if name_edit:
 		name_edit.text = level_name
@@ -249,7 +250,7 @@ func validate() -> void:
 	if spawns.is_empty():
 		errors.append("Place at least one enemy spawn (S).")
 	if tower_spawns.is_empty():
-		warnings.append("No tower spawns: rewards will only be upgrades.")
+		warnings.append("No tower spawns: rewards will only be repairs.")
 	if goals.is_empty():
 		return
 	var dist := {goals[0]: 0}
@@ -260,7 +261,7 @@ func validate() -> void:
 		head += 1
 		for dir in DIRS:
 			var n := c + dir
-			if not dist.has(n) and at(n) != "#":
+			if not dist.has(n) and at(n) not in ["#", "O"]:
 				dist[n] = dist[c] + 1
 				q.append(n)
 	for s in spawns:
@@ -484,7 +485,7 @@ func _draw() -> void:
 			var c := Vector2i(x, y)
 			var ch: String = map[y][x]
 			var r := cell_rect(c)
-			BoardDraw.draw_tile(self, r, ch, (x + y) % 2 == 0, t)
+			BoardDraw.draw_tile(self, r, ch, (x + y) % 2 == 0, t, at(c + Vector2i.UP) == "O", at(c + Vector2i.LEFT) == "O")
 			match ch:
 				"P":
 					draw_circle(r.get_center(), 13.0, Color("3fbf7f"))
@@ -511,7 +512,7 @@ func _draw() -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	text("LEVEL EDITOR  ·  %s" % to_level().name.to_upper(), Vector2(18, 36), 20, Color("e8e8f0"))
-	var hint := "LMB paint  ·  RMB erase  ·  Ctrl+Z undo  ·  1-7 tools"
+	var hint := "LMB paint  ·  RMB erase  ·  Ctrl+Z undo  ·  1-8 tools"
 	if hover != NONE:
 		hint = "%d, %d   ·   " % [hover.x, hover.y] + hint
 	if message_t > 0.0:
