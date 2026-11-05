@@ -24,6 +24,12 @@ func put(type: String, c: Vector2i) -> Dictionary:
 	return main.blocks[-1]
 
 
+func enemy(c: Vector2i) -> Dictionary:
+	var e: Dictionary = main.make_enemy("grunt", c, 1.0)
+	main.enemies.append(e)
+	return e
+
+
 func key(k: int, echo := false) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = k
@@ -89,14 +95,65 @@ func _process(_delta: float) -> bool:
 	main.try_move(Vector2i.RIGHT)
 	check(g.cell == Vector2i(9, 2), "cannot seal enemy path")
 
-	# no pushing during a wave
+	# pushing works while enemies trickle in
 	main.blocks.clear()
 	var w := put("bolt", Vector2i(5, 2))
 	main.player = Vector2i(4, 2)
 	main.phase = main.Phase.WAVE
 	main.try_move(Vector2i.RIGHT)
-	check(w.cell == Vector2i(5, 2), "no pushing during wave")
-	main.phase = main.Phase.BUILD
+	check(w.cell == Vector2i(6, 2), "pushing works during the enemy stream")
+
+	# a walking enemy blocks a push into its cell
+	enemy(Vector2i(7, 2))
+	main.player = Vector2i(5, 2)
+	main.try_move(Vector2i.RIGHT)
+	check(w.cell == Vector2i(6, 2), "can't push a block onto an enemy")
+	main.enemies.clear()
+
+	# enemies re-route the moment a block lands on their next cell
+	var r := enemy(Vector2i(2, 2))
+	r.next = Vector2i(3, 2)
+	put("stone", Vector2i(3, 2))
+	check(r.next == Vector2i(2, 2) and not r.free, "blocked enemy turns back to re-route")
+	var inside := false
+	for i in 120:
+		main.move_enemy(r, 1.0 / 60.0)
+		inside = inside or main.block_index(r.cell) >= 0
+	check(not inside and r.cell != Vector2i(2, 2), "re-routed enemy walks around the block")
+	main.enemies.clear()
+
+	# an enemy sealed into a pocket phases out towards the path, faster each time
+	main.blocks.clear()
+	var trapped := enemy(Vector2i(10, 1))
+	put("stone", Vector2i(9, 1))
+	put("stone", Vector2i(11, 1))
+	put("stone", Vector2i(10, 2))
+	check(trapped.free and is_equal_approx(trapped.boost, main.CUT_OFF_BOOST), "cut-off enemy gets free walk and a speed boost")
+	for i in 240:
+		main.move_enemy(trapped, 1.0 / 60.0)
+	check(not trapped.free and main.dist.has(trapped.cell), "free-walking enemy rejoins the path")
+	check(is_equal_approx(trapped.boost, main.CUT_OFF_BOOST), "speed boost stays after rejoining")
+	main.enemies.clear()
+
+	# stages: clearing one pauses for a reward while the stream carries on
+	main.reset_run()
+	main.dmg_mult["bolt"] = 50.0
+	main.compute_stats()
+	main.start_wave()
+	for i in 60 * 120:
+		if main.phase != main.Phase.WAVE:
+			break
+		main.update_game(1.0 / 60.0, 1.0 / 60.0)
+	check(main.phase == main.Phase.REWARD and main.wave_idx == 1, "clearing the first stage gives a reward")
+	check(main.stage_spawned >= 2, "next stage is already trickling in")
+	main.choose_reward(0)
+	check(main.phase == main.Phase.WAVE, "after the reward the stream resumes")
+
+	# back to a clean level 1 board for the combo checks
+	main.reset_run()
+	main.blocks.clear()
+	main.player = Vector2i(4, 2)
+	w = put("bolt", Vector2i(5, 2))
 
 	# combos
 	var tz := put("tesla", Vector2i(5, 1))
@@ -158,7 +215,7 @@ func _process(_delta: float) -> bool:
 	key(KEY_H)
 	check(not main.rewards_hidden, "H shows it again")
 	key(KEY_1)
-	check(main.phase == main.Phase.BUILD, "picking works once shown")
+	check(main.phase == main.Phase.WAVE, "picking works once shown and resumes the stream")
 
 	# carried blocks never make a tower spawn unusable
 	main.carried = ["bolt", "cannon", "frost", "tesla", "stone", "bolt"]
@@ -179,8 +236,8 @@ func _process(_delta: float) -> bool:
 	key(KEY_ENTER)
 	check(main.phase == main.Phase.BUILD and main.level_idx == 1 and main.blocks.size() == 1, "ENTER starts that level fresh")
 	main.wave_idx = main.levels[1].waves - 1
-	main.wave_cleared()
-	check(main.phase == main.Phase.VICTORY and main.level_idx == 1, "last wave wins without moving to the next level")
+	main.stages_cleared(1)
+	check(main.phase == main.Phase.VICTORY and main.level_idx == 1, "last stage wins without moving to the next level")
 	key(KEY_ENTER)
 	check(main.phase == main.Phase.TITLE and main.select_idx == 1, "winning returns to the level select")
 	key(KEY_3)

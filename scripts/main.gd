@@ -18,6 +18,8 @@ const UPGRADE_TYPES := ["amp", "clock", "lens"]
 const START_LIVES := 20
 const MOVE_BUFFER := 5  # most taps that can queue up ahead of the player
 const HOLD_DELAY := 0.2  # seconds a direction key is held before the player keeps walking
+const TRICKLE := 1.8  # enemies come one by one: each type's spawn gap is stretched by this
+const CUT_OFF_BOOST := 1.25  # speed multiplier an enemy gains each time a push cuts it off from the core
 
 enum Phase { TITLE, BUILD, WAVE, REWARD, GAMEOVER, VICTORY }
 
@@ -26,7 +28,9 @@ var levels: Array = Data.LEVELS
 var custom := false
 var select_idx := 0  # level highlighted on the level select
 var level_idx := 0
-var wave_idx := 0
+var wave_idx := 0  # stages fully resolved (every enemy of the stage killed or leaked)
+var stage_spawned := 0  # stages queued into the enemy stream so far
+var stage_left := {}  # stage -> its enemies still queued or on the field
 var lives := START_LIVES
 var kills := 0
 
@@ -45,6 +49,7 @@ var spawn_turn := 0  # index of the tower spawn whose turn it is
 var next_spawn := NONE  # where the next reward tower drops, NONE if every spawn is covered
 var deadlocks: Array[Vector2i] = []
 var dist: Dictionary = {}
+var free_field: Dictionary = {}  # steps to the nearest cell connected to the core, ignoring blocks
 var player := Vector2i.ZERO
 var player_draw := Vector2.ZERO
 var player_facing := Vector2i.RIGHT
@@ -119,6 +124,8 @@ func reset_run(i := 0) -> void:
 func load_level(i: int) -> void:
 	level_idx = i
 	wave_idx = 0
+	stage_spawned = 0
+	stage_left.clear()
 	var lv: Dictionary = levels[i]
 	H = lv.map.size()
 	W = 0
@@ -210,8 +217,11 @@ func enter_build() -> void:
 	on_board_changed()
 
 
+## Releases the enemy stream. From here on enemies trickle in without a break; the
+## level's waves are stages of that stream, and clearing one pauses for a reward.
 func start_wave() -> void:
-	spawn_queue = next_wave.duplicate()
+	spawn_queue.clear()
+	queue_stage(next_wave)
 	spawn_timer = 0.3
 	spawn_rr = 0
 	undo_stack.clear()
@@ -219,6 +229,15 @@ func start_wave() -> void:
 		b.cd = 0.0
 	on_board_changed()
 	phase = Phase.WAVE
+
+
+func queue_stage(q: Array) -> void:
+	var stage := stage_spawned
+	stage_spawned += 1
+	stage_left[stage] = q.size()
+	for info in q:
+		info.stage = stage
+		spawn_queue.append(info)
 
 
 func generate_wave(li: int, wi: int) -> Array:
@@ -254,10 +273,10 @@ func generate_wave(li: int, wi: int) -> Array:
 	return q
 
 
-func wave_cleared() -> void:
-	wave_idx += 1
-	projectiles.clear()
+func stages_cleared(n: int) -> void:
+	wave_idx += n
 	if wave_idx >= levels[level_idx].waves:
+		projectiles.clear()
 		phase = Phase.VICTORY
 		return
 	roll_rewards()
@@ -293,7 +312,8 @@ func choose_reward(i: int) -> void:
 			drop_reward_block(r.type)
 		"heal":
 			lives = mini(lives + 5, 30)
-	enter_build()
+	phase = Phase.WAVE
+	on_board_changed()
 
 
 func is_tower(ty: String) -> bool:
@@ -413,6 +433,60 @@ func walk_bfs(from: Vector2i, extra: Vector2i) -> Array:
 	return order
 
 
+## Enemies follow the live distance field. One whose cell is no longer connected to the
+## core is cut off: it gets free walk (through blocks) towards the nearest connected cell,
+## and is permanently a little faster for it.
+func reroute_enemies() -> void:
+	for e in enemies:
+		if e.dead or e.free:
+			continue
+		if not dist.has(e.cell):
+			e.free = true
+			e.boost *= CUT_OFF_BOOST
+			effects.append({"kind": "pop", "pos": e.pos, "r": e.size * TILE * 1.6, "t": 0.0, "dur": 0.5,
+				"color": Color("ff9f43")})
+			flash("Cut off! The enemy phases through blocks to rejoin the path - and speeds up.")
+		elif block_index(e.next) >= 0 or not dist.has(e.next):
+			e.next = e.cell  # step back to the cell centre, then pick the new best route
+	if enemies.any(func(e): return e.free and not e.dead):
+		free_field = free_path_field()
+
+
+## Multi-source BFS from every connected cell, walking through blocks but not walls or holes.
+func free_path_field() -> Dictionary:
+	var d := {}
+	var q: Array[Vector2i] = []
+	for c in dist:
+		d[c] = 0
+		q.append(c)
+	var head := 0
+	while head < q.size():
+		var c := q[head]
+		head += 1
+		for dir in DIRS:
+			var n := c + dir
+			if not d.has(n) and not is_wall(n):
+				d[n] = d[c] + 1
+				q.append(n)
+	return d
+
+
+func free_step(c: Vector2i) -> Vector2i:
+	var best := c
+	var bd: int = free_field.get(c, 1 << 20)
+	for dir in DIRS:
+		var n := c + dir
+		if free_field.has(n) and free_field[n] < bd:
+			bd = free_field[n]
+			best = n
+	return best
+
+
+## A walking (not phasing) enemy is in or entering this cell.
+func enemy_at(c: Vector2i) -> bool:
+	return enemies.any(func(e): return not e.dead and not e.free and (e.cell == c or e.next == c))
+
+
 func next_cell(c: Vector2i) -> Vector2i:
 	var best := c
 	var bd: int = dist.get(c, 1 << 20)
@@ -514,6 +588,7 @@ func drop_reward_block(type: String) -> void:
 
 func on_board_changed() -> void:
 	dist = path_field(NONE, NONE)
+	reroute_enemies()
 	compute_stats()
 	for b in blocks:
 		b.locked = is_locked(b.cell)
@@ -765,11 +840,11 @@ func try_move(dir: Vector2i) -> void:
 	if bi < 0:
 		player = target
 		return
-	if phase != Phase.BUILD:
-		flash("Can't push blocks while enemies are on the field!")
-		return
 	var beyond := target + dir
 	if is_hard(beyond) or block_index(beyond) >= 0:
+		return
+	if enemy_at(beyond):
+		flash("An enemy is in the way.")
 		return
 	if tile_at(beyond) == "O":
 		fill_hole(bi, beyond)
@@ -805,7 +880,10 @@ func fill_hole(bi: int, c: Vector2i) -> void:
 	flash("%s fell in and filled the hole." % Data.TOWERS[b.type].name)
 
 
+## Undo is a setup-phase tool; once enemies are moving, pushes are final.
 func push_undo() -> void:
+	if phase != Phase.BUILD:
+		return
 	var saved := []
 	for b in blocks:
 		saved.append(b.duplicate())
@@ -814,7 +892,7 @@ func push_undo() -> void:
 
 func undo() -> void:
 	if undo_stack.is_empty():
-		flash("Nothing to undo this build phase.")
+		flash("Nothing to undo.")
 		return
 	var s: Dictionary = undo_stack.pop_back()
 	player = s.player
@@ -858,18 +936,21 @@ func update_game(dt: float, real_dt: float) -> void:
 	if phase != Phase.WAVE:
 		return
 
+	if spawn_queue.is_empty() and stage_spawned < levels[level_idx].waves:
+		queue_stage(generate_wave(level_idx, stage_spawned))
 	spawn_timer -= dt
 	if spawn_timer <= 0.0 and not spawn_queue.is_empty():
 		var info: Dictionary = spawn_queue.pop_front()
 		var s: Vector2i = spawns[spawn_rr % spawns.size()]
 		spawn_rr += 1
 		var e := make_enemy(info.type, s, info.scale)
+		e.stage = info.stage
 		if info.boss:
 			e.boss = true
 			e.size *= 1.5
 			e.speed *= 0.8
 		enemies.append(e)
-		spawn_timer = Data.ENEMIES[info.type].gap
+		spawn_timer = Data.ENEMIES[info.type].gap * TRICKLE
 
 	for e in enemies:
 		if e.dead:
@@ -884,6 +965,12 @@ func update_game(dt: float, real_dt: float) -> void:
 	update_towers(dt)
 	update_projectiles(dt)
 
+	var cleared := 0
+	for e in enemies:
+		if e.dead:
+			stage_left[e.stage] -= 1
+			if stage_left[e.stage] == 0:
+				cleared += 1
 	enemies = enemies.filter(func(e): return not e.dead)
 	enemies.append_array(pending_enemies)
 	pending_enemies.clear()
@@ -891,8 +978,8 @@ func update_game(dt: float, real_dt: float) -> void:
 	if lives <= 0:
 		lives = 0
 		phase = Phase.GAMEOVER
-	elif spawn_queue.is_empty() and enemies.is_empty():
-		wave_cleared()
+	elif cleared > 0:
+		stages_cleared(cleared)
 
 
 func make_enemy(type: String, cell: Vector2i, scale: float) -> Dictionary:
@@ -903,12 +990,12 @@ func make_enemy(type: String, cell: Vector2i, scale: float) -> Dictionary:
 		"hp": def.hp * scale, "max_hp": def.hp * scale, "scale": scale,
 		"speed": def.speed, "armor": def.armor, "size": def.size, "color": def.color,
 		"slow_t": 0.0, "slow_amt": 0.0, "flash": 0.0, "dead": false, "boss": false,
-		"heading": Vector2.RIGHT,
+		"heading": Vector2.RIGHT, "stage": 0, "free": false, "boost": 1.0,
 	}
 
 
 func move_enemy(e: Dictionary, dt: float) -> void:
-	var remaining: float = e.speed * TILE * (1.0 - e.slow_amt) * dt
+	var remaining: float = e.speed * e.boost * TILE * (1.0 - e.slow_amt) * dt
 	for guard in 8:
 		if remaining <= 0.0:
 			return
@@ -927,7 +1014,9 @@ func move_enemy(e: Dictionary, dt: float) -> void:
 			lives -= 3 if e.boss else 1
 			effects.append({"kind": "leak", "pos": cell_center(goal), "t": 0.0, "dur": 0.5})
 			return
-		e.next = next_cell(e.cell)
+		if e.free and dist.has(e.cell):
+			e.free = false  # back on a connected cell: walk normally again
+		e.next = free_step(e.cell) if e.free else next_cell(e.cell)
 		if e.next == e.cell:
 			return
 
@@ -1055,6 +1144,10 @@ func hurt(e: Dictionary, amount: float) -> void:
 			var s := make_enemy("splitling", e.cell, e.scale)
 			s.pos = e.pos + Vector2(randf_range(-7, 7), randf_range(-7, 7))
 			s.next = e.next
+			s.stage = e.stage
+			s.free = e.free
+			s.boost = e.boost
+			stage_left[e.stage] += 1
 			pending_enemies.append(s)
 
 
@@ -1323,6 +1416,8 @@ func draw_player() -> void:
 
 func draw_enemy(e: Dictionary) -> void:
 	var col: Color = Color.WHITE if e.flash > 0.0 else e.color
+	if e.free:
+		col.a = 0.55  # phasing through blocks
 	var r: float = e.size * TILE
 	var p: Vector2 = e.pos
 	var body := project(p, r)
@@ -1345,6 +1440,12 @@ func draw_enemy(e: Dictionary) -> void:
 			draw_line(body + Vector2(0, -s), body + Vector2(0, s), col.darkened(0.4), 2.0)
 	if e.boss:
 		draw_arc(body, r + 5.0, 0, TAU, 24, Color("f2c94c"), 2.5)
+	if e.boost > 1.0:
+		# one orange tick per time it was cut off
+		var n := roundi(log(e.boost) / log(CUT_OFF_BOOST))
+		for i in mini(n, 6):
+			var a := -PI / 2 + (i - (mini(n, 6) - 1) / 2.0) * 0.45
+			draw_line(body + Vector2.from_angle(a) * (r + 3.0), body + Vector2.from_angle(a) * (r + 8.0), Color("ff9f43"), 2.5)
 	if e.slow_t > 0.0:
 		draw_arc(body, r + 2.0, 0, TAU, 20, Color(0.55, 0.9, 1.0, 0.9), 2.0)
 	if e.hp < e.max_hp:
@@ -1403,9 +1504,9 @@ func draw_top_bar() -> void:
 	var hint := ""
 	match phase:
 		Phase.BUILD:
-			hint = "BUILD - push blocks, SPACE to send the wave"
+			hint = "SETUP - push blocks, SPACE to release the enemies"
 		Phase.WAVE:
-			hint = "WAVE IN PROGRESS - blocks are frozen   (F: speed x%d)" % int(speed)
+			hint = "Enemies trickling in - keep pushing!   (F: speed x%d)" % int(speed)
 	if phase == Phase.BUILD:
 		hint = ("Esc: back to editor" if custom else "Esc: level select") + "  ·  " + hint
 	if message_t > 0.0:
@@ -1423,7 +1524,7 @@ func draw_panel() -> void:
 	var lv: Dictionary = levels[level_idx]
 	text("Lives", Vector2(x + 12, y), 15, Color("9aa0bc"))
 	text(str(lives), Vector2(x + 70, y), 18, Color("e05555") if lives <= 5 else Color.WHITE)
-	text("Wave", Vector2(x + 130, y), 15, Color("9aa0bc"))
+	text("Stage", Vector2(x + 130, y), 15, Color("9aa0bc"))
 	text("%d / %d" % [mini(wave_idx + 1, lv.waves), lv.waves], Vector2(x + 180, y), 18)
 	y += 22
 	text("Kills %d   Path %d tiles" % [kills, dist.get(spawns[0], 0) if not spawns.is_empty() else 0],
@@ -1438,7 +1539,7 @@ func draw_panel() -> void:
 	# next wave preview / live count
 	y += 30
 	if phase == Phase.BUILD:
-		text("NEXT WAVE", Vector2(x + 12, y), 13, Color("6c7290"))
+		text("FIRST STAGE", Vector2(x + 12, y), 13, Color("6c7290"))
 		y += 20
 		var counts := {}
 		var boss := false
@@ -1462,7 +1563,7 @@ func draw_panel() -> void:
 			text("BOSS Brute", Vector2(x + 28, y), 13, Color("f2c94c"))
 		y += 10
 	elif phase == Phase.WAVE:
-		text("ENEMIES LEFT  %d" % (enemies.size() + spawn_queue.size()), Vector2(x + 12, y), 13, Color("6c7290"))
+		text("ON FIELD %d   LEFT IN STAGE %d" % [enemies.size(), stage_left.get(wave_idx, 0)], Vector2(x + 12, y), 13, Color("6c7290"))
 		y += 10
 
 	# hover inspector
@@ -1471,7 +1572,7 @@ func draw_panel() -> void:
 	y += 22
 	y = draw_inspector(x + 12, y)
 
-	var controls := "Move/push: WASD or arrows\nZ undo  ·  SPACE start wave\nF speed  ·  Shift show ranges\nH hide/show rewards  ·  hover for stats"
+	var controls := "Move/push: WASD or arrows\nZ undo (setup)  ·  SPACE release enemies\nF speed  ·  Shift show ranges\nH hide/show rewards  ·  hover for stats"
 	draw_multiline_string(font, Vector2(x + 12, SCREEN.y - 80), controls, HORIZONTAL_ALIGNMENT_LEFT, 236, 12, -1, Color("6c7290"))
 
 
@@ -1608,7 +1709,7 @@ func reward_info(r: Dictionary) -> Array:
 func draw_rewards() -> void:
 	dim()
 	draw_spawn_marker()
-	var head := "WAVE CLEARED!"
+	var head := "STAGE CLEARED!"
 	text(head, Vector2(0, 130), 36, Color("f2c94c"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 	var sub := "Choose a reward"
 	if rewards.any(func(r): return r.kind == "block"):
@@ -1677,7 +1778,7 @@ func draw_end_screen(title: String, col: Color) -> void:
 	dim()
 	text(title, Vector2(0, 280), 48, col, SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 	var lv: Dictionary = levels[level_idx]
-	var sub := "%s: fell on wave %d of %d  ·  %d enemies destroyed  ·  %d blocks" % [
+	var sub := "%s: fell on stage %d of %d  ·  %d enemies destroyed  ·  %d blocks" % [
 		lv.name, mini(wave_idx + 1, lv.waves), lv.waves, kills, blocks.size()]
 	if phase == Phase.VICTORY:
 		sub = "%s beaten with %d lives left  ·  %d enemies destroyed  ·  %d blocks" % [

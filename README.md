@@ -1,17 +1,18 @@
 # Sokoban TD
 
-A Godot 4.7 roguelite that mixes Sokoban and tower defense, seen from a camera tilted towards the player, so walls and blocks show their height. Your towers are crates: push them around to reshape the enemy path, then survive the wave.
+A Godot 4.7 roguelite that mixes Sokoban and tower defense, seen from a camera tilted towards the player, so walls and blocks show their height. Your towers are crates: push them around to reshape the enemy path while a steady trickle of enemies heads for your core.
 
 ## Rules
-- You start the run with one Bolt Tower. You can push blocks only during the build phase. Once enemies are on the field, blocks stay where they are.
-- Enemies always take the shortest route from a spawn (red) to the core (cyan). A push that would seal every route is refused.
+- You start the run with one Bolt Tower, on the first tower spawn. Set up, then press Space to release the enemies. From then on they trickle in one at a time, without breaks, and you keep pushing blocks while they walk (just not into a cell an enemy is standing in). Undo only works during the setup.
+- Enemies always take the shortest route from a spawn (red) to the core (cyan) and re-route the moment a block moves. A push that would seal every route is refused.
+- **Cutting enemies off.** If a push leaves an enemy in a pocket with no way to the core, it phases through blocks (shown faded) to the nearest cell that is connected again, then walks normally. Each time an enemy is cut off it gets 25% faster for good (orange ticks above it).
 - **Tower spawns.** New blocks from rewards drop on the tower spawns (`T`), taking turns between them, so you always know where the next one lands: it glows on the board and on the reward screen. Every choice on a reward screen lands on the same spot. A spawn with a block left on it is skipped. If every spawn is covered, the only reward is a repair until you push a block off one.
 - **Holes** can't be crossed by you or the enemies. Push a block into one and it falls in for good, filling the hole so it becomes floor. Undo brings both back.
 - **Corners are forever.** A block pushed into a wall corner can never come back out (it shows a gold padlock). Faint corner brackets mark these cells.
 - **Upgrade blocks** (Amplifier, Overclock, Lens) don't shoot. Push one next to your towers and it boosts every tower it touches, of any kind, up to four at once.
 - **Combos:** blocks that touch each other (left, right, above or below) give bonuses, shown as a diamond between them. Hover a block to see its stats and active combos.
-- After every wave you choose one reward: a tower, an upgrade block, or (when you're hurt) a repair for +5 lives. Press **H** (or the button) to hide the reward screen and look at the field.
-- **Pick a level** on the start screen (arrows + Enter, number keys, or click). Each level is its own run of 20 waves with fresh lives and blocks; beat the last wave and you're back at the level select. Levels: The Corridor, Split Wall, The Comb, The Pits.
+- The stream is split into stages (20 per level). When every enemy of a stage has been killed or has reached the core, the game pauses and you choose one reward: a tower, an upgrade block, or (when you're hurt) a repair for +5 lives. Press **H** (or the button) to hide the reward screen and look at the field.
+- **Pick a level** on the start screen (arrows + Enter, number keys, or click). Each level is its own run of 20 stages with fresh lives and blocks; clear the last stage and you're back at the level select. Levels: The Corridor, Split Wall, The Comb, The Pits.
 
 ## Map format
 Levels live in `LEVELS` in `scripts/data.gd`. Each row is a string, and all rows must be the same length:
@@ -50,7 +51,7 @@ Press **E** on the level select (or after a run ends) to open the editor.
 - **Copy as code** copies the level as a GDScript dictionary you can paste into `LEVELS` in `scripts/data.gd` to add it to the campaign.
 
 ## Controls
-WASD or arrows: move and push (taps queue up; hold to keep walking, and you stop as soon as you let go) · Z: undo (build phase) · Esc: back to the level select · Space: start the wave · F: game speed · Shift: show all tower ranges · 1-3 or click: pick a reward · H: hide/show the reward screen
+WASD or arrows: move and push (taps queue up; hold to keep walking, and you stop as soon as you let go) · Z: undo (setup only) · Esc: back to the level select · Space: release the enemies · F: game speed · Shift: show all tower ranges · 1-3 or click: pick a reward · H: hide/show the reward screen
 
 ## Tests
 ```
