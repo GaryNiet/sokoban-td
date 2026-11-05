@@ -51,10 +51,13 @@ func _process(_delta: float) -> bool:
 	check(main.W == 22 and main.H == 5, "level 1 is 22x5")
 	check(main.tower_spawns == [T], "level 1 has one tower spawn")
 	check(main.player == Vector2i(17, 2), "player starts beside the tower spawn")
-	check(main.blocks.size() == 1 and main.blocks[0].cell != T, "starting block leaves the spawn free")
-	check(main.next_spawn == T, "free spawn is the next drop point")
+	check(main.blocks.size() == 1 and main.blocks[0].cell == T, "starting tower starts on the tower spawn")
+	check(main.next_spawn == main.NONE, "occupied spawn is not the next drop point")
 
 	# reward drop lands on the spawn and steps the player off it
+	main.blocks.clear()
+	main.on_board_changed()
+	check(main.next_spawn == T, "free spawn is the next drop point")
 	main.player = T
 	main.drop_reward_block("cannon")
 	check(main.blocks[-1].cell == T and main.player != T, "reward tower drops on the spawn")
@@ -119,6 +122,10 @@ func _process(_delta: float) -> bool:
 	var t1 := Vector2i(6, 2)
 	var t2 := Vector2i(17, 2)
 	check(main.tower_spawns == [t1, t2], "level 2 has two tower spawns")
+	check(main.blocks[0].cell == t1 and main.next_spawn == t2, "level starts with a tower on spawn 1, next drop on spawn 2")
+	main.blocks.clear()
+	main.spawn_turn = 0
+	main.on_board_changed()
 	main.drop_reward_block("frost")
 	main.drop_reward_block("tesla")
 	check(main.blocks[-2].cell == t1 and main.blocks[-1].cell == t2, "rewards alternate between spawns")

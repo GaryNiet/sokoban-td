@@ -164,8 +164,12 @@ func load_level(i: int) -> void:
 	projectiles.clear()
 	effects.clear()
 	spawn_queue.clear()
-	for type in carried:
-		place_carried_block(type)
+	# the first block starts on the first tower spawn; the rest cluster around it
+	for k in carried.size():
+		if k == 0 and find_next_spawn() >= 0:
+			drop_reward_block(carried[k])
+		else:
+			place_carried_block(carried[k])
 	player_draw = cell_center(player)
 	clear_moves()
 	enter_build()
@@ -1603,6 +1607,7 @@ func reward_info(r: Dictionary) -> Array:
 
 func draw_rewards() -> void:
 	dim()
+	draw_spawn_marker()
 	var head := "WAVE CLEARED!"
 	text(head, Vector2(0, 130), 36, Color("f2c94c"), SCREEN.x, HORIZONTAL_ALIGNMENT_CENTER)
 	var sub := "Choose a reward"
@@ -1639,20 +1644,19 @@ func draw_rewards() -> void:
 	draw_rect(hb, Color("232740") if hb.has_point(m) else Color("1c1f33"))
 	draw_rect(hb, Color("6c7290"), false, 1.5)
 	text("Hide to view the field  [H]", hb.position + Vector2(0, 22), 14, Color("b8bdd6"), hb.size.x, HORIZONTAL_ALIGNMENT_CENTER)
-	draw_spawn_marker()
 
 
 func draw_hidden_rewards_bar() -> void:
+	draw_spawn_marker()
 	var r := hidden_bar_rect()
 	var a := 0.75 + 0.25 * sin(t * 4.0)
 	draw_rect(r, Color(0.09, 0.1, 0.16, 0.92))
 	draw_rect(r, Color(0.95, 0.79, 0.3, a), false, 2.0)
 	text("Reward waiting - press H or click here to choose", r.position + Vector2(0, 27), 16,
 		Color("f2c94c"), r.size.x, HORIZONTAL_ALIGNMENT_CENTER)
-	draw_spawn_marker()
 
 
-## Points out where a tower reward will land, drawn above the reward overlay.
+## Points out where a tower reward will land: above the dimmed field, below the reward UI.
 func draw_spawn_marker() -> void:
 	if next_spawn == NONE or not rewards.any(func(r): return r.kind == "block"):
 		return
